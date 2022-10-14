@@ -114,7 +114,7 @@ name: harbor
 
 trigger:
   branch:
-    - master
+    - main
 
 volumes:
   - name: docker
