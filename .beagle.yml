@@ -1,0 +1,217 @@
+kind: pipeline
+name: docker
+
+trigger:
+  branch:
+    - dev
+
+volumes:
+  - name: docker
+    host:
+      path: /var/run/docker.sock
+
+workspace:
+  path: /go/src/github.com/containerd/nerdctl
+
+clone:
+  disable: true
+
+steps:
+  - name: fetch
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-git:1.0
+    settings:
+      proxy:
+        from_secret: SOCKS5_PROXY
+
+  - name: s3-cache
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-s3-cache:1.0
+    settings:
+      restore: true
+      mount:
+        - ./vendor
+      endpoint: https://cache.wodcloud.com
+      access_key:
+        from_secret: ACCESS_KEY_MINIO
+      secret_key:
+        from_secret: SECRET_KEY_MINIO
+
+  - name: golang
+    image: registry.cn-qingdao.aliyuncs.com/wod/golang:1.19
+    commands:
+      - bash .beagle/build.sh
+
+  - name: docker-amd64
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker:1.0
+    volumes:
+      - name: docker
+        path: /var/run/docker.sock
+    settings:
+      dockerfile: .beagle/dockerfile
+      base: registry.cn-qingdao.aliyuncs.com/wod/alpine:3-amd64
+      repo: wod/nerdctl
+      version: v0.23.0
+      channel: amd64
+      args: 'TARGETOS=linux,TARGETARCH=amd64'
+      registry: registry.cn-qingdao.aliyuncs.com
+      registry_user:
+        from_secret: REGISTRY_USER_ALIYUN
+      registry_password:
+        from_secret: REGISTRY_PASSWORD_ALIYUN
+
+  - name: docker-arm64
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker:1.0
+    volumes:
+      - name: docker
+        path: /var/run/docker.sock
+    settings:
+      dockerfile: .beagle/dockerfile
+      base: registry.cn-qingdao.aliyuncs.com/wod/alpine:3-arm64
+      repo: wod/nerdctl
+      version: v0.23.0
+      channel: arm64
+      args: 'TARGETOS=linux,TARGETARCH=arm64'
+      registry: registry.cn-qingdao.aliyuncs.com
+      registry_user:
+        from_secret: REGISTRY_USER_ALIYUN
+      registry_password:
+        from_secret: REGISTRY_PASSWORD_ALIYUN
+
+  - name: docker-ppc64le
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker:1.0
+    volumes:
+      - name: docker
+        path: /var/run/docker.sock
+    settings:
+      dockerfile: .beagle/dockerfile
+      base: registry.cn-qingdao.aliyuncs.com/wod/alpine:3-ppc64le
+      repo: wod/nerdctl
+      version: v0.23.0
+      channel: ppc64le
+      args: 'TARGETOS=linux,TARGETARCH=ppc64le'
+      registry: registry.cn-qingdao.aliyuncs.com
+      registry_user:
+        from_secret: REGISTRY_USER_ALIYUN
+      registry_password:
+        from_secret: REGISTRY_PASSWORD_ALIYUN
+
+  - name: docker-arch
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker-manifest:1.0
+    volumes:
+      - name: docker
+        path: /var/run/docker.sock
+    settings:
+      platforms: linux/amd64,linux/arm64,linux/ppc64le
+      template: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23.0-ARCH
+      target: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23.0
+      username:
+        from_secret: REGISTRY_USER_ALIYUN
+      password:
+        from_secret: REGISTRY_PASSWORD_ALIYUN
+
+---
+kind: pipeline
+name: harbor
+
+trigger:
+  branch:
+    - master
+
+volumes:
+  - name: docker
+    host:
+      path: /var/run/docker.sock
+
+clone:
+  disable: true
+
+steps:
+  - name: harbor-amd64
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker-tag:1.0
+    volumes:
+      - name: docker
+        path: /var/run/docker.sock
+    settings:
+      source: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23.0-amd64
+      target: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23-amd64
+      registry: registry.cn-qingdao.aliyuncs.com
+      registry_user:
+        from_secret: REGISTRY_USER_ALIYUN
+      registry_password:
+        from_secret: REGISTRY_PASSWORD_ALIYUN
+
+  - name: harbor-arm64
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker-tag:1.0
+    volumes:
+      - name: docker
+        path: /var/run/docker.sock
+    settings:
+      source: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23.0-arm64
+      target: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23-arm64
+      registry: registry.cn-qingdao.aliyuncs.com
+      registry_user:
+        from_secret: REGISTRY_USER_ALIYUN
+      registry_password:
+        from_secret: REGISTRY_PASSWORD_ALIYUN
+
+  - name: harbor-ppc64le
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker-tag:1.0
+    volumes:
+      - name: docker
+        path: /var/run/docker.sock
+    settings:
+      source: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23.0-ppc64le
+      target: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23-ppc64le
+      registry: registry.cn-qingdao.aliyuncs.com
+      registry_user:
+        from_secret: REGISTRY_USER_ALIYUN
+      registry_password:
+        from_secret: REGISTRY_PASSWORD_ALIYUN
+
+  - name: harbor-arch
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker-manifest:1.0
+    volumes:
+      - name: docker
+        path: /var/run/docker.sock
+    settings:
+      platforms: linux/amd64,linux/arm64,linux/ppc64le
+      template: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23-ARCH
+      target: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23
+      username:
+        from_secret: REGISTRY_USER_ALIYUN
+      password:
+        from_secret: REGISTRY_PASSWORD_ALIYUN
+
+---
+kind: secret
+name: SOCKS5_PROXY
+get:
+  name: SOCKS5_PROXY
+  path: devops-secrets
+
+---
+kind: secret
+name: REGISTRY_USER_ALIYUN
+get:
+  name: REGISTRY_USER_ALIYUN
+  path: devops-secrets
+
+---
+kind: secret
+name: REGISTRY_PASSWORD_ALIYUN
+get:
+  name: REGISTRY_PASSWORD_ALIYUN
+  path: devops-secrets
+
+---
+kind: secret
+name: ACCESS_KEY_MINIO
+get:
+  name: ACCESS_KEY_MINIO
+  path: devops-secrets
+
+---
+kind: secret
+name: SECRET_KEY_MINIO
+get:
+  name: SECRET_KEY_MINIO
+  path: devops-secrets
