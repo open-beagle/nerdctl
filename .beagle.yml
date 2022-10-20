@@ -94,13 +94,31 @@ steps:
       registry_password:
         from_secret: REGISTRY_PASSWORD_ALIYUN
 
+  - name: docker-mips64le
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker:1.0
+    volumes:
+      - name: docker
+        path: /var/run/docker.sock
+    settings:
+      dockerfile: .beagle/dockerfile
+      base: registry.cn-qingdao.aliyuncs.com/wod/alpine:3-mips64le
+      repo: wod/nerdctl
+      version: v0.23.0
+      channel: mips64le
+      args: 'TARGETOS=linux,TARGETARCH=mips64le'
+      registry: registry.cn-qingdao.aliyuncs.com
+      registry_user:
+        from_secret: REGISTRY_USER_ALIYUN
+      registry_password:
+        from_secret: REGISTRY_PASSWORD_ALIYUN
+
   - name: docker-arch
     image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker-manifest:1.0
     volumes:
       - name: docker
         path: /var/run/docker.sock
     settings:
-      platforms: linux/amd64,linux/arm64,linux/ppc64le
+      platforms: linux/amd64,linux/arm64,linux/ppc64le,linux/mips64le
       template: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23.0-ARCH
       target: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23.0
       username:
@@ -167,13 +185,27 @@ steps:
       registry_password:
         from_secret: REGISTRY_PASSWORD_ALIYUN
 
+  - name: harbor-mips64le
+    image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker-tag:1.0
+    volumes:
+      - name: docker
+        path: /var/run/docker.sock
+    settings:
+      source: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23.0-mips64le
+      target: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23-mips64le
+      registry: registry.cn-qingdao.aliyuncs.com
+      registry_user:
+        from_secret: REGISTRY_USER_ALIYUN
+      registry_password:
+        from_secret: REGISTRY_PASSWORD_ALIYUN
+
   - name: harbor-arch
     image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker-manifest:1.0
     volumes:
       - name: docker
         path: /var/run/docker.sock
     settings:
-      platforms: linux/amd64,linux/arm64,linux/ppc64le
+      platforms: linux/amd64,linux/arm64,linux/ppc64le,linux/mips64le
       template: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23-ARCH
       target: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v0.23
       username:
