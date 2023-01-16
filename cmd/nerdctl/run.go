@@ -50,6 +50,7 @@ import (
 	"github.com/containerd/nerdctl/pkg/netutil"
 	"github.com/containerd/nerdctl/pkg/platformutil"
 	"github.com/containerd/nerdctl/pkg/referenceutil"
+	"github.com/containerd/nerdctl/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/pkg/strutil"
 	"github.com/containerd/nerdctl/pkg/taskutil"
 	dopts "github.com/docker/cli/opts"
@@ -71,7 +72,7 @@ func newRunCommand() *cobra.Command {
 		longHelp += "WARNING: `nerdctl run` is experimental on Windows and currently broken (https://github.com/containerd/nerdctl/issues/28)"
 	case "freebsd":
 		longHelp += "\n"
-		longHelp += "WARNING: `nerdctl run` is experimental on FreeBSD and currently requires `--net=none` (https://github.com/containerd/nerdctl/blob/master/docs/freebsd.md)"
+		longHelp += "WARNING: `nerdctl run` is experimental on FreeBSD and currently requires `--net=none` (https://github.com/containerd/nerdctl/blob/main/docs/freebsd.md)"
 	}
 	var runCommand = &cobra.Command{
 		Use:               "run [flags] IMAGE [COMMAND] [ARG...]",
@@ -142,6 +143,7 @@ func setCreateFlags(cmd *cobra.Command) {
 	// FIXME: not support IPV6 yet
 	cmd.Flags().String("ip", "", "IPv4 address to assign to the container")
 	cmd.Flags().StringP("hostname", "h", "", "Container host name")
+	cmd.Flags().String("mac-address", "", "MAC address to assign to the container")
 	// #endregion
 
 	cmd.Flags().String("ipc", "", `IPC namespace to use ("host"|"private")`)
@@ -156,7 +158,7 @@ func setCreateFlags(cmd *cobra.Command) {
 	cmd.Flags().Int64("memory-swappiness", -1, "Tune container memory swappiness (0 to 100) (default -1)")
 	cmd.Flags().String("kernel-memory", "", "Kernel memory limit (deprecated)")
 	cmd.Flags().Bool("oom-kill-disable", false, "Disable OOM Killer")
-	cmd.Flags().Int("oom-score-adj", 0, "Tune container’s OOM preferences (-1000 to 1000)")
+	cmd.Flags().Int("oom-score-adj", 0, "Tune container’s OOM preferences (-1000 to 1000, rootless: 100 to 1000)")
 	cmd.Flags().String("pid", "", "PID namespace to use")
 	cmd.RegisterFlagCompletionFunc("pid", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return []string{"host"}, cobra.ShellCompDirectiveNoFileComp
@@ -295,7 +297,7 @@ func runAction(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	container, gc, err := createContainer(cmd, ctx, client, args, platform, flagI, flagT, flagD)
+	container, gc, err := createContainer(ctx, cmd, client, args, platform, flagI, flagT, flagD)
 	if err != nil {
 		if gc != nil {
 			defer gc()
@@ -313,7 +315,7 @@ func runAction(cmd *cobra.Command, args []string) error {
 			return errors.New("flag -d and --rm cannot be specified together")
 		}
 		defer func() {
-			if err := removeContainer(cmd, ctx, container, true, true); err != nil {
+			if err := removeContainer(ctx, cmd, container, true, true); err != nil {
 				logrus.WithError(err).Warnf("failed to remove container %s", id)
 			}
 		}()
@@ -383,7 +385,7 @@ func runAction(cmd *cobra.Command, args []string) error {
 }
 
 // FIXME: split to smaller functions
-func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd.Client, args []string, platform string, flagI, flagT, flagD bool) (containerd.Container, func(), error) {
+func createContainer(ctx context.Context, cmd *cobra.Command, client *containerd.Client, args []string, platform string, flagI, flagT, flagD bool) (containerd.Container, func(), error) {
 	// simulate the behavior of double dash
 	newArg := []string{}
 	if len(args) >= 2 && args[1] == "--" {
@@ -391,11 +393,14 @@ func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd
 		newArg = append(newArg, args[2:]...)
 		args = newArg
 	}
+	var internalLabels internalLabels
+	internalLabels.platform = platform
 
 	ns, err := cmd.Flags().GetString("namespace")
 	if err != nil {
 		return nil, nil, err
 	}
+	internalLabels.namespace = ns
 
 	var (
 		opts  []oci.SpecOpts
@@ -425,12 +430,13 @@ func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		return nil, nil, err
 	}
+	internalLabels.stateDir = stateDir
 
 	opts = append(opts,
 		oci.WithDefaultSpec(),
 	)
 
-	opts, err = setPlatformOptions(opts, cmd, id)
+	opts, internalLabels, err = setPlatformOptions(ctx, opts, cmd, client, id, internalLabels)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -454,21 +460,15 @@ func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd
 	if err != nil {
 		return nil, nil, err
 	}
-	if envFiles := strutil.DedupeStrSlice(envFile); len(envFiles) > 0 {
-		env, err := parseEnvVars(envFiles)
-		if err != nil {
-			return nil, nil, err
-		}
-		opts = append(opts, oci.WithEnv(env))
-	}
-
 	env, err := cmd.Flags().GetStringArray("env")
 	if err != nil {
 		return nil, nil, err
 	}
-	if env := strutil.DedupeStrSlice(env); len(env) > 0 {
-		opts = append(opts, oci.WithEnv(env))
+	envs, err := generateEnvs(envFile, env)
+	if err != nil {
+		return nil, nil, err
 	}
+	opts = append(opts, oci.WithEnv(envs))
 
 	if flagI {
 		if flagD {
@@ -483,12 +483,13 @@ func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd
 		opts = append(opts, oci.WithTTY)
 	}
 
-	mountOpts, anonVolumes, mountPoints, err := generateMountOpts(cmd, ctx, client, ensuredImage)
+	mountOpts, anonVolumes, mountPoints, err := generateMountOpts(ctx, cmd, client, ensuredImage)
 	if err != nil {
 		return nil, nil, err
-	} else {
-		opts = append(opts, mountOpts...)
 	}
+	internalLabels.anonVolumes = anonVolumes
+	internalLabels.mountPoints = mountPoints
+	opts = append(opts, mountOpts...)
 
 	var logURI string
 	if flagD {
@@ -534,6 +535,7 @@ func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd
 			}
 		}
 	}
+	internalLabels.logURI = logURI
 
 	restartValue, err := cmd.Flags().GetString("restart")
 	if err != nil {
@@ -564,6 +566,7 @@ func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd
 		hostname = customHostname
 	}
 	opts = append(opts, oci.WithHostname(hostname))
+	internalLabels.hostname = hostname
 	// `/etc/hostname` does not exist on FreeBSD
 	if runtime.GOOS == "linux" {
 		hostnamePath := filepath.Join(stateDir, "hostname")
@@ -573,10 +576,14 @@ func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd
 		opts = append(opts, withCustomEtcHostname(hostnamePath))
 	}
 
-	netOpts, netSlice, ipAddress, ports, err := generateNetOpts(cmd, dataStore, stateDir, ns, id)
+	netOpts, netSlice, ipAddress, ports, macAddress, err := generateNetOpts(cmd, dataStore, stateDir, ns, id)
 	if err != nil {
 		return nil, nil, err
 	}
+	internalLabels.networks = netSlice
+	internalLabels.ipAddress = ipAddress
+	internalLabels.ports = ports
+	internalLabels.macAddress = macAddress
 	opts = append(opts, netOpts...)
 
 	hookOpt, err := withNerdctlOCIHook(cmd, id)
@@ -585,23 +592,23 @@ func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd
 	}
 	opts = append(opts, hookOpt)
 
-	if uOpts, err := generateUserOpts(cmd); err != nil {
+	uOpts, err := generateUserOpts(cmd)
+	if err != nil {
 		return nil, nil, err
-	} else {
-		opts = append(opts, uOpts...)
 	}
+	opts = append(opts, uOpts...)
 
-	if gOpts, err := generateGroupsOpts(cmd); err != nil {
+	gOpts, err := generateGroupsOpts(cmd)
+	if err != nil {
 		return nil, nil, err
-	} else {
-		opts = append(opts, gOpts...)
 	}
+	opts = append(opts, gOpts...)
 
-	if umaskOpts, err := generateUmaskOpts(cmd); err != nil {
+	umaskOpts, err := generateUmaskOpts(cmd)
+	if err != nil {
 		return nil, nil, err
-	} else {
-		opts = append(opts, umaskOpts...)
 	}
+	opts = append(opts, umaskOpts...)
 
 	rtCOpts, err := generateRuntimeCOpts(cmd)
 	if err != nil {
@@ -637,6 +644,7 @@ func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd
 			return nil, nil, err
 		}
 	}
+	internalLabels.name = name
 
 	var pidFile string
 	if cmd.Flags().Lookup("pidfile").Changed {
@@ -645,6 +653,7 @@ func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd
 			return nil, nil, err
 		}
 	}
+	internalLabels.pidFile = pidFile
 
 	extraHosts, err := cmd.Flags().GetStringSlice("add-host")
 	if err != nil {
@@ -656,7 +665,9 @@ func createContainer(cmd *cobra.Command, ctx context.Context, client *containerd
 			return nil, nil, err
 		}
 	}
-	ilOpt, err := withInternalLabels(ns, name, hostname, stateDir, extraHosts, netSlice, ipAddress, ports, logURI, anonVolumes, pidFile, platform, mountPoints)
+	internalLabels.extraHosts = extraHosts
+
+	ilOpt, err := withInternalLabels(internalLabels)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -717,7 +728,7 @@ func generateRootfsOpts(ctx context.Context, client *containerd.Client, platform
 			return nil, nil, nil, err
 		}
 		rawRef := args[0]
-		ensured, err = ensureImage(cmd, ctx, client, rawRef, ocispecPlatforms, pull, nil, false)
+		ensured, err = ensureImage(ctx, cmd, client, rawRef, ocispecPlatforms, pull, nil, false)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -886,9 +897,6 @@ func generateLogURI(dataStore string) (*url.URL, error) {
 	args := map[string]string{
 		logging.MagicArgv1: dataStore,
 	}
-	if runtime.GOOS == "windows" {
-		return nil, nil
-	}
 
 	return cio.LogURIGenerator("binary", selfExe, args)
 }
@@ -998,62 +1006,95 @@ func withStop(stopSignal string, stopTimeout int, ensuredImage *imgutil.EnsuredI
 	}
 }
 
-func withInternalLabels(ns, name, hostname, containerStateDir string, extraHosts, networks []string, ipAddress string, ports []gocni.PortMapping, logURI string, anonVolumes []string, pidFile, platform string, mountPoints []*mountutil.Processed) (containerd.NewContainerOpts, error) {
+type internalLabels struct {
+	// labels from cmd options
+	namespace  string
+	platform   string
+	extraHosts []string
+	pidFile    string
+	// labels from cmd options or automatically set
+	name     string
+	hostname string
+	// automatically generated
+	stateDir string
+	// network
+	networks   []string
+	ipAddress  string
+	ports      []gocni.PortMapping
+	macAddress string
+	// volumn
+	mountPoints []*mountutil.Processed
+	anonVolumes []string
+	// pid namespace
+	pidContainer string
+	// log
+	logURI string
+}
+
+func withInternalLabels(internalLabels internalLabels) (containerd.NewContainerOpts, error) {
 	m := make(map[string]string)
-	m[labels.Namespace] = ns
-	if name != "" {
-		m[labels.Name] = name
+	m[labels.Namespace] = internalLabels.namespace
+	if internalLabels.name != "" {
+		m[labels.Name] = internalLabels.name
 	}
-	m[labels.Hostname] = hostname
-	extraHostsJSON, err := json.Marshal(extraHosts)
+	m[labels.Hostname] = internalLabels.hostname
+	extraHostsJSON, err := json.Marshal(internalLabels.extraHosts)
 	if err != nil {
 		return nil, err
 	}
 	m[labels.ExtraHosts] = string(extraHostsJSON)
-	m[labels.StateDir] = containerStateDir
-	networksJSON, err := json.Marshal(networks)
+	m[labels.StateDir] = internalLabels.stateDir
+	networksJSON, err := json.Marshal(internalLabels.networks)
 	if err != nil {
 		return nil, err
 	}
 	m[labels.Networks] = string(networksJSON)
-	if len(ports) > 0 {
-		portsJSON, err := json.Marshal(ports)
+	if len(internalLabels.ports) > 0 {
+		portsJSON, err := json.Marshal(internalLabels.ports)
 		if err != nil {
 			return nil, err
 		}
 		m[labels.Ports] = string(portsJSON)
 	}
-	if logURI != "" {
-		m[labels.LogURI] = logURI
+	if internalLabels.logURI != "" {
+		m[labels.LogURI] = internalLabels.logURI
 	}
-	if len(anonVolumes) > 0 {
-		anonVolumeJSON, err := json.Marshal(anonVolumes)
+	if len(internalLabels.anonVolumes) > 0 {
+		anonVolumeJSON, err := json.Marshal(internalLabels.anonVolumes)
 		if err != nil {
 			return nil, err
 		}
 		m[labels.AnonymousVolumes] = string(anonVolumeJSON)
 	}
 
-	if pidFile != "" {
-		m[labels.PIDFile] = pidFile
+	if internalLabels.pidFile != "" {
+		m[labels.PIDFile] = internalLabels.pidFile
 	}
 
-	if ipAddress != "" {
-		m[labels.IPAddress] = ipAddress
+	if internalLabels.ipAddress != "" {
+		m[labels.IPAddress] = internalLabels.ipAddress
 	}
 
-	m[labels.Platform], err = platformutil.NormalizeString(platform)
+	m[labels.Platform], err = platformutil.NormalizeString(internalLabels.platform)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(mountPoints) > 0 {
-		mounts := dockercompatMounts(mountPoints)
+	if len(internalLabels.mountPoints) > 0 {
+		mounts := dockercompatMounts(internalLabels.mountPoints)
 		mountPointsJSON, err := json.Marshal(mounts)
 		if err != nil {
 			return nil, err
 		}
 		m[labels.Mounts] = string(mountPointsJSON)
+	}
+
+	if internalLabels.macAddress != "" {
+		m[labels.MACAddress] = internalLabels.macAddress
+	}
+
+	if internalLabels.pidContainer != "" {
+		m[labels.PIDContainer] = internalLabels.pidContainer
 	}
 
 	return containerd.WithAdditionalContainerLabels(m), nil
@@ -1135,4 +1176,99 @@ func parseEnvVars(paths []string) ([]string, error) {
 		}
 	}
 	return vars, nil
+}
+
+func withOSEnv(envs []string) ([]string, error) {
+	newEnvs := make([]string, len(envs))
+
+	// from https://github.com/docker/cli/blob/v22.06.0-beta.0/opts/env.go#L18
+	getEnv := func(val string) (string, error) {
+		arr := strings.SplitN(val, "=", 2)
+		if arr[0] == "" {
+			return "", errors.New("invalid environment variable: " + val)
+		}
+		if len(arr) > 1 {
+			return val, nil
+		}
+		if envVal, ok := os.LookupEnv(arr[0]); ok {
+			return arr[0] + "=" + envVal, nil
+		}
+		return val, nil
+	}
+	for i := range envs {
+		env, err := getEnv(envs[i])
+		if err != nil {
+			return nil, err
+		}
+		newEnvs[i] = env
+	}
+
+	return newEnvs, nil
+}
+
+func generateSharingPIDOpts(ctx context.Context, targetCon containerd.Container) ([]oci.SpecOpts, error) {
+	opts := make([]oci.SpecOpts, 0)
+
+	task, err := targetCon.Task(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	status, err := task.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if status.Status != containerd.Running {
+		return nil, fmt.Errorf("shared container is not running")
+	}
+
+	spec, err := targetCon.Spec(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	isHost := true
+	for _, n := range spec.Linux.Namespaces {
+		if n.Type == specs.PIDNamespace {
+			isHost = false
+		}
+	}
+	if isHost {
+		opts = append(opts, oci.WithHostNamespace(specs.PIDNamespace))
+		if rootlessutil.IsRootless() {
+			opts = append(opts, withBindMountHostProcfs)
+		}
+	} else {
+		ns := specs.LinuxNamespace{
+			Type: specs.PIDNamespace,
+			Path: fmt.Sprintf("/proc/%d/ns/pid", task.Pid()),
+		}
+		opts = append(opts, oci.WithLinuxNamespace(ns))
+	}
+
+	return opts, nil
+}
+
+// generateEnvs combines environment variables from `--env-file` and `--env`.
+// Pass an empty slice if any arg is not used.
+func generateEnvs(envFile []string, env []string) ([]string, error) {
+	var envs []string
+	var err error
+
+	if envFiles := strutil.DedupeStrSlice(envFile); len(envFiles) > 0 {
+		envs, err = parseEnvVars(envFiles)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if env := strutil.DedupeStrSlice(env); len(env) > 0 {
+		envs = append(envs, env...)
+	}
+
+	if envs, err = withOSEnv(envs); err != nil {
+		return nil, err
+	}
+
+	return envs, nil
 }

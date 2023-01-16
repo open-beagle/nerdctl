@@ -150,6 +150,7 @@ func TestRunCIDFile(t *testing.T) {
 func TestRunEnvFile(t *testing.T) {
 	t.Parallel()
 	base := testutil.NewBase(t)
+	base.Env = append(os.Environ(), "HOST_ENV=ENV-IN-HOST")
 
 	tID := testutil.Identifier(t)
 	file1, err := os.CreateTemp("", tID)
@@ -165,23 +166,30 @@ func TestRunEnvFile(t *testing.T) {
 	path2 := file2.Name()
 	defer file2.Close()
 	defer os.Remove(path2)
-	err = os.WriteFile(path2, []byte("# this is a comment line\nTESTKEY2=TESTVAL2"), 0666)
+	err = os.WriteFile(path2, []byte("# this is a comment line\nTESTKEY2=TESTVAL2\nHOST_ENV"), 0666)
 	assert.NilError(base.T, err)
 
 	base.Cmd("run", "--rm", "--env-file", path1, "--env-file", path2, testutil.CommonImage, "sh", "-c", "echo -n $TESTKEY1").AssertOutExactly("TESTVAL1")
 	base.Cmd("run", "--rm", "--env-file", path1, "--env-file", path2, testutil.CommonImage, "sh", "-c", "echo -n $TESTKEY2").AssertOutExactly("TESTVAL2")
+	base.Cmd("run", "--rm", "--env-file", path1, "--env-file", path2, testutil.CommonImage, "sh", "-c", "echo -n $HOST_ENV").AssertOutExactly("ENV-IN-HOST")
 }
 
 func TestRunEnv(t *testing.T) {
 	t.Parallel()
 	base := testutil.NewBase(t)
+	base.Env = append(os.Environ(), "CORGE=corge-value-in-host", "GARPLY=garply-value-in-host")
 	base.Cmd("run", "--rm",
 		"--env", "FOO=foo1,foo2",
 		"--env", "BAR=bar1 bar2",
 		"--env", "BAZ=",
-		"--env", "QUX",
+		"--env", "QUX", // not exported in OS
 		"--env", "QUUX=quux1",
 		"--env", "QUUX=quux2",
+		"--env", "CORGE", // OS exported
+		"--env", "GRAULT=grault_key=grault_value", // value contains `=` char
+		"--env", "GARPLY=", // OS exported
+		"--env", "WALDO=", // not exported in OS
+
 		testutil.CommonImage, "env").AssertOutWithFunc(func(stdout string) error {
 		if !strings.Contains(stdout, "\nFOO=foo1,foo2\n") {
 			return errors.New("got bad FOO")
@@ -198,6 +206,19 @@ func TestRunEnv(t *testing.T) {
 		if !strings.Contains(stdout, "\nQUUX=quux2\n") {
 			return errors.New("got bad QUUX")
 		}
+		if !strings.Contains(stdout, "\nCORGE=corge-value-in-host\n") {
+			return errors.New("got bad CORGE")
+		}
+		if !strings.Contains(stdout, "\nGRAULT=grault_key=grault_value\n") {
+			return errors.New("got bad GRAULT")
+		}
+		if !strings.Contains(stdout, "\nGARPLY=\n") && runtime.GOOS != "windows" {
+			return errors.New("got bad GARPLY")
+		}
+		if !strings.Contains(stdout, "\nWALDO=\n") && runtime.GOOS != "windows" {
+			return errors.New("got bad WALDO")
+		}
+
 		return nil
 	})
 }
@@ -242,6 +263,41 @@ func TestRunWithJsonFileLogDriver(t *testing.T) {
 		// The log file size is compared to 5200 bytes (instead 5k) to keep docker compatibility.
 		// Docker log rotation lacks precision because the size check is done at the log entry level
 		// and not at the byte level (io.Writer), so docker log files can exceed 5k
+		if fInfo.Size() > 5200 {
+			t.Fatal("file size exceeded 5k")
+		}
+	}
+}
+
+func TestRunWithJsonFileLogDriverAndLogPathOpt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("json-file log driver is not yet implemented on Windows")
+	}
+	testutil.DockerIncompatible(t)
+	base := testutil.NewBase(t)
+	containerName := testutil.Identifier(t)
+
+	defer base.Cmd("rm", "-f", containerName).AssertOK()
+	customLogJSONPath := filepath.Join(t.TempDir(), containerName, containerName+"-json.log")
+	base.Cmd("run", "-d", "--log-driver", "json-file", "--log-opt", fmt.Sprintf("log-path=%s", customLogJSONPath), "--log-opt", "max-size=5K", "--log-opt", "max-file=2", "--name", containerName, testutil.CommonImage,
+		"sh", "-euxc", "hexdump -C /dev/urandom | head -n1000").AssertOK()
+
+	time.Sleep(3 * time.Second)
+	rawBytes, err := os.ReadFile(customLogJSONPath)
+	assert.NilError(t, err)
+	if len(rawBytes) == 0 {
+		t.Fatalf("logs are not written correctly to log-path: %s", customLogJSONPath)
+	}
+
+	// matches = current log file + old log files to retain
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(customLogJSONPath), containerName+"*"))
+	assert.NilError(t, err)
+	if len(matches) != 2 {
+		t.Fatalf("the number of log files is not equal to 2 files, got: %s", matches)
+	}
+	for _, file := range matches {
+		fInfo, err := os.Stat(file)
+		assert.NilError(t, err)
 		if fInfo.Size() > 5200 {
 			t.Fatal("file size exceeded 5k")
 		}
@@ -384,7 +440,7 @@ COPY --from=builder /go/src/logger/logger /
 	base.Cmd("container", "rm", "-f", containerName).AssertOK()
 	base.Cmd("run", "-d", "--log-driver", fmt.Sprintf("binary://%s/logger", tmpDir), "--name", containerName, testutil.CommonImage,
 		"sh", "-euxc", "echo foo; echo bar").AssertOK()
-	defer base.Cmd("container", "rm", "-f", containerName)
+	defer base.Cmd("container", "rm", "-f", containerName).AssertOK()
 
 	inspectedContainer := base.InspectContainer(containerName)
 	bytes, err := os.ReadFile(filepath.Join(os.TempDir(), fmt.Sprintf("%s_%s.log", inspectedContainer.ID, "stdout")))

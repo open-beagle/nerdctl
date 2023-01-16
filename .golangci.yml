@@ -41,7 +41,7 @@ linters:
     # - gomodguard
     # - goprintffuncname
     # - gosec (gas)
-    - gosimple # (megacheck)
+    - gosimple  # (megacheck)
     # - interfacer
     # - lll
     # - maligned
@@ -49,6 +49,7 @@ linters:
     # - nlreturn
     # - noctx
     # - nolintlint
+    - revive
     # - rowserrcheck
     # - scopelint
     # - sqlclosecheck
@@ -56,7 +57,7 @@ linters:
     - stylecheck
     # - testpackage
     # - tparallel
-    # - unconvert
+    - unconvert
     # - unparam
     - unused
     # - whitespace

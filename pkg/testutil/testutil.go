@@ -363,9 +363,9 @@ func (c *Cmd) AssertOutNotContains(s string) {
 	c.AssertOutWithFunc(func(stdout string) error {
 		if strings.Contains(stdout, s) {
 			return fmt.Errorf("expected stdout to not contain %q", s)
-		} else {
-			return nil
 		}
+		return nil
+
 	})
 }
 
@@ -378,6 +378,24 @@ func (c *Cmd) AssertOutExactly(s string) {
 		return nil
 	}
 	c.AssertOutWithFunc(fn)
+}
+
+func (c *Cmd) AssertOutStreamsExactly(stdout, stderr string) {
+	c.Base.T.Helper()
+	fn := func(sout, serr string) error {
+		msg := ""
+		if sout != stdout {
+			msg += fmt.Sprintf("stdout mismatch, expected %q, got %q\n", stdout, sout)
+		}
+		if serr != stderr {
+			msg += fmt.Sprintf("stderr mismatch, expected %q, got %q\n", stderr, serr)
+		}
+		if msg != "" {
+			return fmt.Errorf(msg)
+		}
+		return nil
+	}
+	c.AssertOutStreamsWithFunc(fn)
 }
 
 func (c *Cmd) AssertNoOut(s string) {
@@ -396,6 +414,13 @@ func (c *Cmd) AssertOutWithFunc(fn func(stdout string) error) {
 	res := c.Run()
 	assert.Equal(c.Base.T, 0, res.ExitCode, res.Combined())
 	assert.NilError(c.Base.T, fn(res.Stdout()), res.Combined())
+}
+
+func (c *Cmd) AssertOutStreamsWithFunc(fn func(stdout, stderr string) error) {
+	c.Base.T.Helper()
+	res := c.Run()
+	assert.Equal(c.Base.T, 0, res.ExitCode, res.Combined())
+	assert.NilError(c.Base.T, fn(res.Stdout(), res.Stderr()), res.Combined())
 }
 
 func (c *Cmd) Out() string {
@@ -428,7 +453,7 @@ func M(m *testing.M) {
 	flag.StringVar(&flagTestTarget, "test.target", Nerdctl, "target to test")
 	flag.BoolVar(&flagTestKillDaemon, "test.kill-daemon", false, "enable tests that kill the daemon")
 	flag.Parse()
-	fmt.Printf("test target: %q\n", flagTestTarget)
+	fmt.Fprintf(os.Stderr, "test target: %q\n", flagTestTarget)
 	os.Exit(m.Run())
 }
 
@@ -547,7 +572,18 @@ func RequireSystemService(t testing.TB, sv string) {
 
 const Namespace = "nerdctl-test"
 
+func NewBaseWithNamespace(t *testing.T, ns string) *Base {
+	if ns == "" || ns == "default" || ns == Namespace {
+		t.Fatalf(`the other base namespace cannot be "%s"`, ns)
+	}
+	return newBase(t, ns)
+}
+
 func NewBase(t *testing.T) *Base {
+	return newBase(t, Namespace)
+}
+
+func newBase(t *testing.T, ns string) *Base {
 	base := &Base{
 		T:                t,
 		Target:           GetTarget(),
@@ -560,7 +596,7 @@ func NewBase(t *testing.T) *Base {
 		if err != nil {
 			t.Fatal(err)
 		}
-		base.Args = []string{"--namespace=" + Namespace}
+		base.Args = []string{"--namespace=" + ns}
 		base.ComposeBinary = ""
 	case Docker:
 		base.Binary, err = exec.LookPath("docker")

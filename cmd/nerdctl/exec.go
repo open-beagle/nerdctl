@@ -28,9 +28,9 @@ import (
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/cmd/ctr/commands"
 	"github.com/containerd/containerd/cmd/ctr/commands/tasks"
+	"github.com/containerd/nerdctl/pkg/flagutil"
 	"github.com/containerd/nerdctl/pkg/idgen"
 	"github.com/containerd/nerdctl/pkg/idutil/containerwalker"
-	"github.com/containerd/nerdctl/pkg/strutil"
 	"github.com/containerd/nerdctl/pkg/taskutil"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
@@ -40,7 +40,7 @@ import (
 
 func newExecCommand() *cobra.Command {
 	var execCommand = &cobra.Command{
-		Use:               "exec [OPTIONS] CONTAINER COMMAND [ARG...]",
+		Use:               "exec [flags] CONTAINER COMMAND [ARG...]",
 		Args:              cobra.MinimumNArgs(2),
 		Short:             "Run a command in a running container",
 		RunE:              execAction,
@@ -50,7 +50,7 @@ func newExecCommand() *cobra.Command {
 	}
 	execCommand.Flags().SetInterspersed(false)
 
-	execCommand.Flags().BoolP("tty", "t", false, "(Currently -t needs to correspond to -i)")
+	execCommand.Flags().BoolP("tty", "t", false, "Allocate a pseudo-TTY")
 	execCommand.Flags().BoolP("interactive", "i", false, "Keep STDIN open even if not attached")
 	execCommand.Flags().BoolP("detach", "d", false, "Detached mode: run command in the background")
 	execCommand.Flags().StringP("workdir", "w", "", "Working directory inside the container")
@@ -243,18 +243,15 @@ func generateExecProcessSpec(ctx context.Context, cmd *cobra.Command, args []str
 	if err != nil {
 		return nil, err
 	}
-	if envFiles := strutil.DedupeStrSlice(envFile); len(envFiles) > 0 {
-		env, err := parseEnvVars(envFiles)
-		if err != nil {
-			return nil, err
-		}
-		pspec.Env = append(pspec.Env, env...)
-	}
 	env, err := cmd.Flags().GetStringArray("env")
 	if err != nil {
 		return nil, err
 	}
-	pspec.Env = append(pspec.Env, strutil.DedupeStrSlice(env)...)
+	envs, err := generateEnvs(envFile, env)
+	if err != nil {
+		return nil, err
+	}
+	pspec.Env = flagutil.ReplaceOrAppendEnvValues(pspec.Env, envs)
 
 	privileged, err := cmd.Flags().GetBool("privileged")
 	if err != nil {
@@ -277,7 +274,6 @@ func execShellComplete(cmd *cobra.Command, args []string, toComplete string) ([]
 			return st == containerd.Running
 		}
 		return shellCompleteContainerNames(cmd, statusFilterFn)
-	} else {
-		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
+	return nil, cobra.ShellCompDirectiveNoFileComp
 }

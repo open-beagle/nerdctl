@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -31,6 +32,14 @@ import (
 	"github.com/containerd/nerdctl/pkg/reflectutil"
 
 	"github.com/sirupsen/logrus"
+)
+
+// ComposeExtensionKey defines fields used to implement extension features.
+const (
+	ComposeVerify           = "x-nerdctl-verify"
+	ComposeCosignPublicKey  = "x-nerdctl-cosign-public-key"
+	ComposeSign             = "x-nerdctl-sign"
+	ComposeCosignPrivateKey = "x-nerdctl-cosign-private-key"
 )
 
 func warnUnknownFields(svc types.ServiceConfig) {
@@ -56,6 +65,7 @@ func warnUnknownFields(svc types.ServiceConfig) {
 		"Entrypoint",
 		"Environment",
 		"Extends", // handled by the loader
+		"Extensions",
 		"ExtraHosts",
 		"Hostname",
 		"Image",
@@ -289,7 +299,9 @@ func getGPUs(svc types.ServiceConfig) (reqs []string, _ error) {
 	return reqs, nil
 }
 
-// getRestart returns `nerdctl run --restart` flag string ("no" or "always")
+var restartFailurePat = regexp.MustCompile(`^on-failure:\d+$`)
+
+// getRestart returns `nerdctl run --restart` flag string
 //
 // restart:                         {"no" (default), "always", "on-failure", "unless-stopped"} (https://github.com/compose-spec/compose-spec/blob/167f207d0a8967df87c5ed757dbb1a2bb6025a1e/spec.md#restart)
 // deploy.restart_policy.condition: {"none", "on-failure", "any" (default)}                    (https://github.com/compose-spec/compose-spec/blob/167f207d0a8967df87c5ed757dbb1a2bb6025a1e/deploy.md#restart_policy)
@@ -298,12 +310,14 @@ func getRestart(svc types.ServiceConfig) (string, error) {
 	switch svc.Restart {
 	case "":
 		restartFlag = "no"
-	case "no", "always":
+	case "no", "always", "on-failure", "unless-stopped":
 		restartFlag = svc.Restart
-	case "on-failure", "unless-stopped":
-		logrus.Warnf("Ignoring: service %s: restart=%q (unimplemented)", svc.Name, svc.Restart)
 	default:
-		logrus.Warnf("Ignoring: service %s: restart=%q (unknown)", svc.Name, svc.Restart)
+		if restartFailurePat.MatchString(svc.Restart) {
+			restartFlag = svc.Restart
+		} else {
+			logrus.Warnf("Ignoring: service %s: restart=%q (unknown)", svc.Name, svc.Restart)
+		}
 	}
 
 	if svc.Deploy != nil && svc.Deploy.RestartPolicy != nil {
@@ -358,7 +372,9 @@ func getNetworks(project *types.Project, svc types.ServiceConfig) ([]networkName
 			return nil, errors.New("net and network_mode must not be set together")
 		}
 		if strings.Contains(svc.NetworkMode, ":") {
-			return nil, fmt.Errorf("unsupported network_mode: %q", svc.NetworkMode)
+			if !strings.HasPrefix(svc.NetworkMode, "container:") {
+				return nil, fmt.Errorf("unsupported network_mode: %q", svc.NetworkMode)
+			}
 		}
 		fullNames = append(fullNames, networkNamePair{
 			fullName:         svc.NetworkMode,
@@ -550,15 +566,15 @@ func newContainer(project *types.Project, parsed *Service, i int) (*Container, e
 		}
 	}
 
-	if networks, err := getNetworks(project, svc); err != nil {
+	networks, err := getNetworks(project, svc)
+	if err != nil {
 		return nil, err
-	} else {
-		for _, net := range networks {
-			c.RunArgs = append(c.RunArgs, "--net="+net.fullName)
-			if value, ok := svc.Networks[net.shortNetworkName]; ok {
-				if value != nil && value.Ipv4Address != "" {
-					c.RunArgs = append(c.RunArgs, "--ip="+value.Ipv4Address)
-				}
+	}
+	for _, net := range networks {
+		c.RunArgs = append(c.RunArgs, "--net="+net.fullName)
+		if value, ok := svc.Networks[net.shortNetworkName]; ok {
+			if value != nil && value.Ipv4Address != "" {
+				c.RunArgs = append(c.RunArgs, "--ip="+value.Ipv4Address)
 			}
 		}
 	}
@@ -692,9 +708,6 @@ func servicePortConfigToFlagP(c types.ServicePortConfig) (string, error) {
 	case "", "ingress":
 	default:
 		return "", fmt.Errorf("unsupported port mode: %s", c.Mode)
-	}
-	if c.Published == "" {
-		return "", fmt.Errorf("unsupported port number: %q", c.Published)
 	}
 	if c.Target <= 0 {
 		return "", fmt.Errorf("unsupported port number: %d", c.Target)

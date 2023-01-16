@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 	"text/template"
@@ -34,6 +35,7 @@ import (
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/pkg/progress"
 	"github.com/containerd/containerd/platforms"
+	dockerreference "github.com/containerd/containerd/reference/docker"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/nerdctl/pkg/formatter"
 	"github.com/containerd/nerdctl/pkg/imgutil"
@@ -59,14 +61,15 @@ Properties:
 - BLOB SIZE:  Size of the blobs (such as layer tarballs) in the content store
 `
 	var imagesCommand = &cobra.Command{
-		Use:               "images",
-		Short:             shortHelp,
-		Long:              longHelp,
-		Args:              cobra.MaximumNArgs(1),
-		RunE:              imagesAction,
-		ValidArgsFunction: imagesShellComplete,
-		SilenceUsage:      true,
-		SilenceErrors:     true,
+		Use:                   "images [flags] [REPOSITORY[:TAG]]",
+		Short:                 shortHelp,
+		Long:                  longHelp,
+		Args:                  cobra.MaximumNArgs(1),
+		RunE:                  imagesAction,
+		ValidArgsFunction:     imagesShellComplete,
+		SilenceUsage:          true,
+		SilenceErrors:         true,
+		DisableFlagsInUseLine: true,
 	}
 
 	imagesCommand.Flags().BoolP("quiet", "q", false, "Only show numeric IDs")
@@ -101,9 +104,7 @@ func imagesAction(cmd *cobra.Command, args []string) error {
 	}
 	defer cancel()
 
-	var (
-		imageStore = client.ImageService()
-	)
+	var imageStore = client.ImageService()
 	imageList, err := imageStore.List(ctx, filters...)
 	if err != nil {
 		return err
@@ -113,28 +114,92 @@ func imagesAction(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		beforeFilters, sinceFilters, err := imgutil.ParseFilters(inputFilters)
+		f, err := imgutil.ParseFilters(inputFilters)
 		if err != nil {
 			return err
 		}
+
+		imageList, err = filterByLabel(ctx, client, imageList, f.Labels)
+		if err != nil {
+			return err
+		}
+
+		imageList, err = filterByReference(imageList, f.Reference)
+		if err != nil {
+			return err
+		}
+
 		var beforeImages []images.Image
-		if len(beforeFilters) > 0 {
-			beforeImages, err = imageStore.List(ctx, beforeFilters...)
+		if len(f.Before) > 0 {
+			beforeImages, err = imageStore.List(ctx, f.Before...)
 			if err != nil {
 				return err
 			}
 		}
-		var afterImages []images.Image
-		if len(sinceFilters) > 0 {
-			afterImages, err = imageStore.List(ctx, sinceFilters...)
+		var sinceImages []images.Image
+		if len(f.Since) > 0 {
+			sinceImages, err = imageStore.List(ctx, f.Since...)
 			if err != nil {
 				return err
 			}
 		}
 
-		imageList = imgutil.FilterImages(imageList, beforeImages, afterImages)
+		imageList = imgutil.FilterImages(imageList, beforeImages, sinceImages)
 	}
 	return printImages(ctx, cmd, client, imageList)
+}
+
+func filterByReference(imageList []images.Image, filters []string) ([]images.Image, error) {
+	var filteredImageList []images.Image
+	logrus.Debug(filters)
+	for _, image := range imageList {
+		logrus.Debug(image.Name)
+		var matches int
+		for _, f := range filters {
+			var ref dockerreference.Reference
+			var err error
+			ref, err = dockerreference.ParseAnyReference(image.Name)
+			if err != nil {
+				return nil, fmt.Errorf("unable to parse image name: %s while filtering by reference because of %s", image.Name, err.Error())
+			}
+
+			familiarMatch, err := dockerreference.FamiliarMatch(f, ref)
+			if err != nil {
+				return nil, err
+			}
+			regexpMatch, err := regexp.MatchString(f, image.Name)
+			if err != nil {
+				return nil, err
+			}
+			if familiarMatch || regexpMatch {
+				matches++
+			}
+		}
+		if matches == len(filters) {
+			filteredImageList = append(filteredImageList, image)
+		}
+	}
+	return filteredImageList, nil
+}
+
+func filterByLabel(ctx context.Context, client *containerd.Client, imageList []images.Image, filters map[string]string) ([]images.Image, error) {
+	for lk, lv := range filters {
+		var imageLabels []images.Image
+		for _, img := range imageList {
+			ci := containerd.NewImage(client, img)
+			cfg, _, err := imgutil.ReadImageConfig(ctx, ci)
+			if err != nil {
+				return nil, err
+			}
+			if val, ok := cfg.Config.Labels[lk]; ok {
+				if val == lv || lv == "" {
+					imageLabels = append(imageLabels, img)
+				}
+			}
+		}
+		imageList = imageLabels
+	}
+	return imageList, nil
 }
 
 type imagePrintable struct {
@@ -352,9 +417,8 @@ func imagesShellComplete(cmd *cobra.Command, args []string, toComplete string) (
 	if len(args) == 0 {
 		// show image names
 		return shellCompleteImageNames(cmd)
-	} else {
-		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
+	return nil, cobra.ShellCompDirectiveNoFileComp
 }
 
 type snapshotKey string

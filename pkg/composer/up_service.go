@@ -86,20 +86,7 @@ func (c *Composer) upServices(ctx context.Context, parsedServices []*servicepars
 	}
 
 	logrus.Infof("Stopping containers (forcibly)") // TODO: support gracefully stopping
-	var rmWG sync.WaitGroup
-	for id, container := range containers {
-		id := id
-		container := container
-		rmWG.Add(1)
-		go func() {
-			defer rmWG.Done()
-			logrus.Infof("Stopping container %s", container.Name)
-			if err := c.runNerdctlCmd(ctx, "rm", "-f", id); err != nil {
-				logrus.Warn(err)
-			}
-		}()
-	}
-	rmWG.Wait()
+	c.stopContainersFromParsedServices(ctx, containers)
 	return nil
 }
 
@@ -110,17 +97,16 @@ func (c *Composer) ensureServiceImage(ctx context.Context, ps *serviceparser.Ser
 		}
 		if ok, err := c.ImageExists(ctx, ps.Image); err != nil {
 			return err
-		} else if ok {
-			logrus.Debugf("Image %s already exists, not building", ps.Image)
-		} else {
+		} else if !ok {
 			return c.buildServiceImage(ctx, ps.Image, ps.Build, ps.Unparsed.Platform, bo)
 		}
+		// even when c.ImageExists returns true, we need to call c.EnsureImage
+		// because ps.PullMode can be "always". So no return here.
+		logrus.Debugf("Image %s already exists, not building", ps.Image)
 	}
 
-	// even when c.ImageExists returns true, we need to call c.EnsureImage
-	// because ps.PullMode can be "always".
 	logrus.Infof("Ensuring image %s", ps.Image)
-	if err := c.EnsureImage(ctx, ps.Image, ps.PullMode, ps.Unparsed.Platform, quiet); err != nil {
+	if err := c.EnsureImage(ctx, ps.Image, ps.PullMode, ps.Unparsed.Platform, ps, quiet); err != nil {
 		return err
 	}
 	return nil

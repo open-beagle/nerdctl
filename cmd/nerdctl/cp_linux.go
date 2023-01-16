@@ -48,11 +48,11 @@ WARNING: 'nerdctl cp' is designed only for use with trusted, cooperating contain
 Using 'nerdctl cp' with untrusted or malicious containers is unsupported and may not provide protection against unexpected behavior.
 `
 
-	usage := `cp [OPTIONS] CONTAINER:SRC_PATH DEST_PATH|-
-  nerdctl cp [OPTIONS] SRC_PATH|- CONTAINER:DEST_PATH`
+	usage := `cp [flags] CONTAINER:SRC_PATH DEST_PATH|-
+  nerdctl cp [flags] SRC_PATH|- CONTAINER:DEST_PATH`
 	var cpCommand = &cobra.Command{
 		Use:               usage,
-		Args:              cobra.ExactArgs(2),
+		Args:              IsExactArgs(2),
 		Short:             shortHelp,
 		Long:              longHelp,
 		RunE:              cpAction,
@@ -152,11 +152,12 @@ func kopy(ctx context.Context, container2host bool, pid int, dst, src string, fo
 		dstExists      bool
 		dstExistsAsDir bool
 	)
-	if st, err := os.Stat(srcFull); err != nil {
+	st, err := os.Stat(srcFull)
+	if err != nil {
 		return err
-	} else {
-		srcIsDir = st.IsDir()
 	}
+	srcIsDir = st.IsDir()
+
 	// dst may not exist yet, so err is negligible
 	if st, err := os.Stat(dstFull); err == nil {
 		dstExists = true
@@ -233,7 +234,7 @@ func kopy(ctx context.Context, container2host bool, pid int, dst, src string, fo
 	}
 	tarX = append(tarX, "-f", "-")
 	if rootlessutil.IsRootless() {
-		nsenter := []string{"nsenter", "-t", strconv.Itoa(int(pid)), "-U", "--preserve-credentials", "--"}
+		nsenter := []string{"nsenter", "-t", strconv.Itoa(pid), "-U", "--preserve-credentials", "--"}
 		if container2host {
 			tarC = append(nsenter, tarC...)
 		} else {

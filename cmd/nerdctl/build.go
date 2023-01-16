@@ -41,7 +41,7 @@ import (
 
 func newBuildCommand() *cobra.Command {
 	var buildCommand = &cobra.Command{
-		Use:   "build",
+		Use:   "build [flags] PATH",
 		Short: "Build an image from a Dockerfile. Needs buildkitd to be running.",
 		Long: `Build an image from a Dockerfile. Needs buildkitd to be running.
 If Dockerfile is not present and -f is not specified, it will look for Containerfile and build with it. `,
@@ -152,11 +152,11 @@ func buildAction(cmd *cobra.Command, args []string) error {
 	if runIPFSRegistry {
 		logrus.Infof("Ensuring IPFS registry is running")
 		nerdctlCmd, nerdctlArgs := globalFlags(cmd)
-		if out, err := exec.Command(nerdctlCmd, append(nerdctlArgs, "ipfs", "registry", "up")...).CombinedOutput(); err != nil {
+		out, err := exec.Command(nerdctlCmd, append(nerdctlArgs, "ipfs", "registry", "up")...).CombinedOutput()
+		if err != nil {
 			return fmt.Errorf("failed to start IPFS registry: %v: %v", string(out), err)
-		} else {
-			logrus.Infof("IPFS registry is running: %v", string(out))
 		}
+		logrus.Infof("IPFS registry is running: %v", string(out))
 	}
 
 	quiet, err := cmd.Flags().GetBool("quiet")
@@ -290,6 +290,11 @@ func generateBuildctlArgs(cmd *cobra.Command, buildkitHost string, platform, arg
 			needsLoading = true
 		}
 	} else {
+		if !strings.Contains(output, "type=") {
+			// should accept --output <DIR> as an alias of --output
+			// type=local,dest=<DIR>
+			output = fmt.Sprintf("type=local,dest=%s", output)
+		}
 		if strings.Contains(output, "type=docker") || strings.Contains(output, "type=oci") {
 			needsLoading = true
 		}
@@ -299,7 +304,6 @@ func generateBuildctlArgs(cmd *cobra.Command, buildkitHost string, platform, arg
 		return "", nil, false, "", nil, nil, err
 	}
 	if tags = strutil.DedupeStrSlice(tagValue); len(tags) > 0 {
-
 		ref := tags[0]
 		named, err := dockerreference.ParseNormalizedNamed(ref)
 		if err != nil {
@@ -315,6 +319,8 @@ func generateBuildctlArgs(cmd *cobra.Command, buildkitHost string, platform, arg
 			}
 			tags[idx] = dockerreference.TagNameOnly(named).String()
 		}
+	} else if len(tags) == 0 {
+		output = output + ",dangling-name-prefix=<none>"
 	}
 
 	buildctlArgs = buildkitutil.BuildctlBaseArgs(buildkitHost)
@@ -382,20 +388,34 @@ func generateBuildctlArgs(cmd *cobra.Command, buildkitHost string, platform, arg
 		return "", nil, false, "", nil, cleanup, err
 	}
 	for _, ba := range strutil.DedupeStrSlice(buildArgsValue) {
-		buildctlArgs = append(buildctlArgs, "--opt=build-arg:"+ba)
-
-		// Support `--build-arg BUILDKIT_INLINE_CACHE=1` for compatibility with `docker buildx build`
-		// https://github.com/docker/buildx/blob/v0.6.3/docs/reference/buildx_build.md#-export-build-cache-to-an-external-cache-destination---cache-to
-		if strings.HasPrefix(ba, "BUILDKIT_INLINE_CACHE=") {
-			bic := strings.TrimPrefix(ba, "BUILDKIT_INLINE_CACHE=")
-			bicParsed, err := strconv.ParseBool(bic)
-			if err == nil {
-				if bicParsed {
-					buildctlArgs = append(buildctlArgs, "--export-cache=type=inline")
-				}
+		arr := strings.Split(ba, "=")
+		if len(arr) == 1 && len(arr[0]) > 0 {
+			// Avoid masking default build arg value from Dockerfile if environment variable is not set
+			// https://github.com/moby/moby/issues/24101
+			val, ok := os.LookupEnv(arr[0])
+			if ok {
+				buildctlArgs = append(buildctlArgs, fmt.Sprintf("--opt=build-arg:%s=%s", ba, val))
 			} else {
-				logrus.WithError(err).Warnf("invalid BUILDKIT_INLINE_CACHE: %q", bic)
+				logrus.Debugf("ignoring unset build arg %q", ba)
 			}
+		} else if len(arr) > 1 && len(arr[0]) > 0 {
+			buildctlArgs = append(buildctlArgs, "--opt=build-arg:"+ba)
+
+			// Support `--build-arg BUILDKIT_INLINE_CACHE=1` for compatibility with `docker buildx build`
+			// https://github.com/docker/buildx/blob/v0.6.3/docs/reference/buildx_build.md#-export-build-cache-to-an-external-cache-destination---cache-to
+			if strings.HasPrefix(ba, "BUILDKIT_INLINE_CACHE=") {
+				bic := strings.TrimPrefix(ba, "BUILDKIT_INLINE_CACHE=")
+				bicParsed, err := strconv.ParseBool(bic)
+				if err == nil {
+					if bicParsed {
+						buildctlArgs = append(buildctlArgs, "--export-cache=type=inline")
+					}
+				} else {
+					logrus.WithError(err).Warnf("invalid BUILDKIT_INLINE_CACHE: %q", bic)
+				}
+			}
+		} else {
+			return "", nil, false, "", nil, nil, fmt.Errorf("invalid build arg %q", ba)
 		}
 	}
 

@@ -73,7 +73,7 @@ func loadAction(cmd *cobra.Command, _ []string) error {
 		if err != nil {
 			return err
 		}
-		if stdinStat.Size() == 0 {
+		if stdinStat.Size() == 0 && (stdinStat.Mode()&os.ModeNamedPipe) == 0 {
 			return errors.New("stdin is empty and input flag is not specified")
 		}
 	}
@@ -111,8 +111,14 @@ func loadImage(in io.Reader, cmd *cobra.Command, platMC platforms.MatchComparer,
 	if err != nil {
 		return err
 	}
-	imgs, err := client.Import(ctx, in, containerd.WithDigestRef(archive.DigestTranslator(sn)), containerd.WithSkipDigestRef(func(name string) bool { return name != "" }), containerd.WithImportPlatform(platMC))
+
+	r := &readCounter{Reader: in}
+	imgs, err := client.Import(ctx, r, containerd.WithDigestRef(archive.DigestTranslator(sn)), containerd.WithSkipDigestRef(func(name string) bool { return name != "" }), containerd.WithImportPlatform(platMC))
 	if err != nil {
+		if r.N == 0 {
+			// Avoid confusing "unrecognized image format"
+			return errors.New("no image was built")
+		}
 		if errors.Is(err, images.ErrEmptyWalk) {
 			err = fmt.Errorf("%w (Hint: set `--platform=PLATFORM` or `--all-platforms`)", err)
 		}
@@ -123,7 +129,7 @@ func loadImage(in io.Reader, cmd *cobra.Command, platMC platforms.MatchComparer,
 
 		// TODO: Show unpack status
 		if !quiet {
-			fmt.Fprintf(cmd.OutOrStdout(), "unpacking %s (%s)...", img.Name, img.Target.Digest)
+			fmt.Fprintf(cmd.OutOrStdout(), "unpacking %s (%s)...\n", img.Name, img.Target.Digest)
 		}
 		err = image.Unpack(ctx, sn)
 		if err != nil {
@@ -132,9 +138,22 @@ func loadImage(in io.Reader, cmd *cobra.Command, platMC platforms.MatchComparer,
 		if quiet {
 			fmt.Fprintln(cmd.OutOrStdout(), img.Target.Digest)
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "done\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "Loaded image: %s\n", img.Name)
 		}
 	}
 
 	return nil
+}
+
+type readCounter struct {
+	io.Reader
+	N int
+}
+
+func (r *readCounter) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if n > 0 {
+		r.N += n
+	}
+	return n, err
 }

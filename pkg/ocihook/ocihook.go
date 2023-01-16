@@ -63,20 +63,20 @@ func Run(stdin io.Reader, stderr io.Writer, event, dataStore, cniPath, cniNetcon
 		return err
 	}
 
-	if containerStateDir := state.Annotations[labels.StateDir]; containerStateDir == "" {
+	containerStateDir := state.Annotations[labels.StateDir]
+	if containerStateDir == "" {
 		return errors.New("state dir must be set")
-	} else {
-		if err := os.MkdirAll(containerStateDir, 0700); err != nil {
-			return fmt.Errorf("failed to create %q: %w", containerStateDir, err)
-		}
-		logFilePath := filepath.Join(containerStateDir, "oci-hook."+event+".log")
-		logFile, err := os.Create(logFilePath)
-		if err != nil {
-			return err
-		}
-		defer logFile.Close()
-		logrus.SetOutput(io.MultiWriter(stderr, logFile))
 	}
+	if err := os.MkdirAll(containerStateDir, 0700); err != nil {
+		return fmt.Errorf("failed to create %q: %w", containerStateDir, err)
+	}
+	logFilePath := filepath.Join(containerStateDir, "oci-hook."+event+".log")
+	logFile, err := os.Create(logFilePath)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	logrus.SetOutput(io.MultiWriter(stderr, logFile))
 
 	opts, err := newHandlerOpts(&state, dataStore, cniPath, cniNetconfPath)
 	if err != nil {
@@ -138,14 +138,17 @@ func newHandlerOpts(state *specs.State, dataStore, cniPath, cniNetconfPath strin
 	case nettype.Host, nettype.None, nettype.Container:
 		// NOP
 	case nettype.CNI:
-		e, err := netutil.NewCNIEnv(cniPath, cniNetconfPath)
+		e, err := netutil.NewCNIEnv(cniPath, cniNetconfPath, netutil.WithDefaultNetwork())
 		if err != nil {
 			return nil, err
 		}
 		cniOpts := []gocni.Opt{
 			gocni.WithPluginDir([]string{cniPath}),
 		}
-		netMap := e.NetworkMap()
+		netMap, err := e.NetworkMap()
+		if err != nil {
+			return nil, err
+		}
 		for _, netstr := range networks {
 			net, ok := netMap[netstr]
 			if !ok {
@@ -176,6 +179,10 @@ func newHandlerOpts(state *specs.State, dataStore, cniPath, cniNetconfPath strin
 
 	if ipAddress, ok := o.state.Annotations[labels.IPAddress]; ok {
 		o.containerIP = ipAddress
+	}
+
+	if macAddress, ok := o.state.Annotations[labels.MACAddress]; ok {
+		o.contianerMAC = macAddress
 	}
 
 	if rootlessutil.IsRootlessChild() {
@@ -213,6 +220,7 @@ type handlerOpts struct {
 	bypassClient      b4nndclient.Client
 	extraHosts        map[string]string // host:ip
 	containerIP       string
+	contianerMAC      string
 }
 
 // hookSpec is from https://github.com/containerd/containerd/blob/v1.4.3/cmd/containerd/command/oci-hook.go#L59-L64
@@ -324,7 +332,7 @@ func getPortMapOpts(opts *handlerOpts) ([]gocni.NamespaceOpts, error) {
 func getIPAddressOpts(opts *handlerOpts) ([]gocni.NamespaceOpts, error) {
 	if opts.containerIP != "" {
 		if rootlessutil.IsRootlessChild() {
-			return nil, fmt.Errorf("containerIP assignment is not supported in rootless mode")
+			logrus.Debug("container IP assignment is not fully supported in rootless mode. The IP is not accessible from the host (but still accessible from other containers).")
 		}
 
 		return []gocni.NamespaceOpts{
@@ -335,6 +343,20 @@ func getIPAddressOpts(opts *handlerOpts) ([]gocni.NamespaceOpts, error) {
 				"IgnoreUnknown": "1",
 			}),
 			gocni.WithArgs("IP", opts.containerIP),
+		}, nil
+	}
+	return nil, nil
+}
+
+func getMACAddressOpts(opts *handlerOpts) ([]gocni.NamespaceOpts, error) {
+	if opts.contianerMAC != "" {
+		return []gocni.NamespaceOpts{
+			gocni.WithLabels(map[string]string{
+				// allow loose CNI argument verification
+				// FYI: https://github.com/containernetworking/cni/issues/560
+				"IgnoreUnknown": "1",
+			}),
+			gocni.WithArgs("MAC", opts.contianerMAC),
 		}, nil
 	}
 	return nil, nil
@@ -361,9 +383,14 @@ func onCreateRuntime(opts *handlerOpts) error {
 		if err != nil {
 			return err
 		}
+		macAddressOpts, err := getMACAddressOpts(opts)
+		if err != nil {
+			return err
+		}
 		var namespaceOpts []gocni.NamespaceOpts
 		namespaceOpts = append(namespaceOpts, portMapOpts...)
 		namespaceOpts = append(namespaceOpts, ipAddressOpts...)
+		namespaceOpts = append(namespaceOpts, macAddressOpts...)
 		hsMeta := hostsstore.Meta{
 			Namespace:  opts.state.Annotations[labels.Namespace],
 			ID:         opts.state.ID,
@@ -454,9 +481,14 @@ func onPostStop(opts *handlerOpts) error {
 		if err != nil {
 			return err
 		}
+		macAddressOpts, err := getMACAddressOpts(opts)
+		if err != nil {
+			return err
+		}
 		var namespaceOpts []gocni.NamespaceOpts
 		namespaceOpts = append(namespaceOpts, portMapOpts...)
 		namespaceOpts = append(namespaceOpts, ipAddressOpts...)
+		namespaceOpts = append(namespaceOpts, macAddressOpts...)
 		if err := opts.cni.Remove(ctx, opts.fullID, "", namespaceOpts...); err != nil {
 			logrus.WithError(err).Errorf("failed to call cni.Remove")
 			return err

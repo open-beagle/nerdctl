@@ -18,26 +18,28 @@
 # TODO: verify commit hash
 
 # Basic deps
-ARG CONTAINERD_VERSION=v1.6.8
+ARG CONTAINERD_VERSION=v1.6.12
 ARG RUNC_VERSION=v1.1.4
 ARG CNI_PLUGINS_VERSION=v1.1.1
 
 # Extra deps: Build
-ARG BUILDKIT_VERSION=v0.10.4
+ARG BUILDKIT_VERSION=v0.10.6
 # Extra deps: Lazy-pulling
-ARG STARGZ_SNAPSHOTTER_VERSION=v0.12.0
+ARG STARGZ_SNAPSHOTTER_VERSION=v0.13.0
+# Extra deps: Nydus Lazy-pulling
+ARG NYDUS_VERSION=v2.1.1
 # Extra deps: Encryption
-ARG IMGCRYPT_VERSION=v1.1.6
+ARG IMGCRYPT_VERSION=v1.1.7
 # Extra deps: Rootless
-ARG ROOTLESSKIT_VERSION=v1.0.1
+ARG ROOTLESSKIT_VERSION=v1.1.0
 ARG SLIRP4NETNS_VERSION=v1.2.0
 # Extra deps: bypass4netns
 ARG BYPASS4NETNS_VERSION=v0.3.0
 # Extra deps: FUSE-OverlayFS
-ARG FUSE_OVERLAYFS_VERSION=v1.9
-ARG CONTAINERD_FUSE_OVERLAYFS_VERSION=v1.0.4
+ARG FUSE_OVERLAYFS_VERSION=v1.10
+ARG CONTAINERD_FUSE_OVERLAYFS_VERSION=v1.0.5
 # Extra deps: IPFS
-ARG KUBO_VERSION=v0.15.0
+ARG KUBO_VERSION=v0.17.0
 # Extra deps: Init
 ARG TINI_VERSION=v0.19.0
 # Extra deps: Debug
@@ -47,6 +49,7 @@ ARG BUILDG_VERSION=v0.4.1
 ARG GO_VERSION=1.19
 ARG UBUNTU_VERSION=22.04
 ARG CONTAINERIZED_SYSTEMD_VERSION=v0.1.1
+ARG GOTESTSUM_VERSION=v1.8.2
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bullseye AS build-base-debian
 # libbtrfs: for containerd
@@ -233,6 +236,7 @@ FROM ubuntu:${UBUNTU_VERSION} AS base
 RUN apt-get update && \
   apt-get install -qq -y --no-install-recommends \
   apparmor \
+  bash-completion \
   ca-certificates curl \
   iproute2 iptables \
   dbus dbus-user-session systemd systemd-sysv \
@@ -242,14 +246,17 @@ RUN curl -L -o /docker-entrypoint.sh https://raw.githubusercontent.com/AkihiroSu
   chmod +x /docker-entrypoint.sh
 COPY --from=out-full / /usr/local/
 RUN perl -pi -e 's/multi-user.target/docker-entrypoint.target/g' /usr/local/lib/systemd/system/*.service && \
-  systemctl enable containerd buildkit stargz-snapshotter
+  systemctl enable containerd buildkit stargz-snapshotter && \
+  mkdir -p /etc/bash_completion.d && \
+  nerdctl completion bash >/etc/bash_completion.d/nerdctl
 COPY ./Dockerfile.d/etc_containerd_config.toml /etc/containerd/config.toml
+COPY ./Dockerfile.d/etc_buildkit_buildkitd.toml /etc/buildkit/buildkitd.toml
 VOLUME /var/lib/containerd
 VOLUME /var/lib/buildkit
 VOLUME /var/lib/containerd-stargz-grpc
 VOLUME /var/lib/nerdctl
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["bash"]
+CMD ["bash", "--login", "-i"]
 
 # convert GO_VERSION=1.16 to the latest release such as "go1.16.1"
 FROM golang:${GO_VERSION}-alpine AS goversion
@@ -265,6 +272,8 @@ COPY --from=goversion /GOVERSION /GOVERSION
 ARG TARGETARCH
 RUN curl -L https://golang.org/dl/$(cat /GOVERSION).linux-${TARGETARCH:-amd64}.tar.gz | tar xzvC /usr/local
 ENV PATH=/usr/local/go/bin:$PATH
+ARG GOTESTSUM_VERSION
+RUN GOBIN=/usr/local/bin go install gotest.tools/gotestsum@${GOTESTSUM_VERSION}
 COPY . /go/src/github.com/containerd/nerdctl
 WORKDIR /go/src/github.com/containerd/nerdctl
 VOLUME /tmp
@@ -281,7 +290,14 @@ RUN systemctl enable test-integration-ipfs-offline test-integration-buildkit-ner
     ipfs init && \
     ipfs config Addresses.API "/ip4/127.0.0.1/tcp/5888" && \
     ipfs config Addresses.Gateway "/ip4/127.0.0.1/tcp/5889"
-CMD ["go", "test", "-v", "-timeout=20m", "./cmd/nerdctl/...", "-args", "-test.kill-daemon"]
+# install nydus components
+ARG NYDUS_VERSION
+RUN curl -L -o nydus-static.tgz "https://github.com/dragonflyoss/image-service/releases/download/${NYDUS_VERSION}/nydus-static-${NYDUS_VERSION}-linux-${TARGETARCH}.tgz" && \
+    tar xzf nydus-static.tgz && \
+    mv nydus-static/nydus-image nydus-static/nydusd nydus-static/nydusify /usr/bin/ && \
+    rm nydus-static.tgz
+CMD ["gotestsum", "--format=testname", "--rerun-fails=2", "--packages=github.com/containerd/nerdctl/cmd/nerdctl/...", \
+  "--", "-timeout=20m", "-args", "-test.kill-daemon"]
 
 FROM test-integration AS test-integration-rootless
 # Install SSH for creating systemd user session.
@@ -304,7 +320,10 @@ RUN systemctl disable test-integration-ipfs-offline
 VOLUME /home/rootless/.local/share
 RUN go test -o /usr/local/bin/nerdctl.test -c ./cmd/nerdctl
 COPY ./Dockerfile.d/test-integration-rootless.sh /
-CMD ["/test-integration-rootless.sh", "nerdctl.test" ,"-test.v", "-test.timeout=20m", "-test.kill-daemon"]
+CMD ["/test-integration-rootless.sh", \
+  "gotestsum", "--format=testname", "--rerun-fails=2", "--raw-command", \
+  "--", "/usr/local/go/bin/go", "tool", "test2json", "-t", "-p", "github.com/containerd/nerdctl/cmd/nerdctl",  \
+    "/usr/local/bin/nerdctl.test", "-test.v", "-test.timeout=20m", "-test.kill-daemon"]
 
 # test for CONTAINERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=slirp4netns
 FROM test-integration-rootless AS test-integration-rootless-port-slirp4netns

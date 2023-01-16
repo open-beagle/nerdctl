@@ -52,8 +52,10 @@ type EnsuredImage struct {
 }
 
 var (
-	FilterBeforeType = "before"
-	FilterSinceType  = "since"
+	FilterBeforeType    = "before"
+	FilterSinceType     = "since"
+	FilterLabelType     = "label"
+	FilterReferenceType = "reference"
 )
 
 // PullMode is either one of "always", "missing", "never"
@@ -161,11 +163,11 @@ func EnsureImage(ctx context.Context, client *containerd.Client, stdout, stderr 
 				return nil, err
 			}
 			return PullImage(ctx, client, stdout, stderr, snapshotter, resolver, ref, ocispecPlatforms, unpack, quiet)
-		} else {
-			logrus.WithError(err).Errorf("server %q does not seem to support HTTPS", refDomain)
-			logrus.Info("Hint: you may want to try --insecure-registry to allow plain HTTP (if you are in a trusted network)")
-			return nil, err
 		}
+		logrus.WithError(err).Errorf("server %q does not seem to support HTTPS", refDomain)
+		logrus.Info("Hint: you may want to try --insecure-registry to allow plain HTTP (if you are in a trusted network)")
+		return nil, err
+
 	}
 	return img, nil
 }
@@ -381,37 +383,55 @@ func ParseRepoTag(imgName string) (string, string) {
 	return repository, tag
 }
 
-func ParseFilters(filters []string) ([]string, []string, error) {
-	var beforeFilters []string
-	var sinceFilters []string
+type Filters struct {
+	Before    []string
+	Since     []string
+	Labels    map[string]string
+	Reference []string
+}
+
+func ParseFilters(filters []string) (*Filters, error) {
+	f := &Filters{Labels: make(map[string]string)}
 	for _, filter := range filters {
 		tempFilterToken := strings.Split(filter, "=")
 		switch len(tempFilterToken) {
 		case 1:
-			return nil, nil, fmt.Errorf("invalid filter %q", filter)
+			return nil, fmt.Errorf("invalid filter %q", filter)
 		case 2:
 			if tempFilterToken[0] == FilterBeforeType {
 				canonicalRef, err := referenceutil.ParseAny(tempFilterToken[1])
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
-				beforeFilters = append(beforeFilters, fmt.Sprintf("name==%s", canonicalRef.String()))
-				beforeFilters = append(beforeFilters, fmt.Sprintf("name==%s", tempFilterToken[1]))
+
+				f.Before = append(f.Before, fmt.Sprintf("name==%s", canonicalRef.String()))
+				f.Before = append(f.Before, fmt.Sprintf("name==%s", tempFilterToken[1]))
 			} else if tempFilterToken[0] == FilterSinceType {
 				canonicalRef, err := referenceutil.ParseAny(tempFilterToken[1])
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
-				sinceFilters = append(sinceFilters, fmt.Sprintf("name==%s", canonicalRef.String()))
-				sinceFilters = append(sinceFilters, fmt.Sprintf("name==%s", tempFilterToken[1]))
+				f.Since = append(f.Since, fmt.Sprintf("name==%s", canonicalRef.String()))
+				f.Since = append(f.Since, fmt.Sprintf("name==%s", tempFilterToken[1]))
+			} else if tempFilterToken[0] == FilterLabelType {
+				// To support filtering labels by keys.
+				f.Labels[tempFilterToken[1]] = ""
+			} else if tempFilterToken[0] == FilterReferenceType {
+				f.Reference = append(f.Reference, tempFilterToken[1])
 			} else {
-				return nil, nil, fmt.Errorf("invalid filter %q", filter)
+				return nil, fmt.Errorf("invalid filter %q", filter)
+			}
+		case 3:
+			if tempFilterToken[0] == FilterLabelType {
+				f.Labels[tempFilterToken[1]] = tempFilterToken[2]
+			} else {
+				return nil, fmt.Errorf("invalid filter %q", filter)
 			}
 		default:
-			return nil, nil, fmt.Errorf("invalid filter %q", filter)
+			return nil, fmt.Errorf("invalid filter %q", filter)
 		}
 	}
-	return beforeFilters, sinceFilters, nil
+	return f, nil
 }
 
 func FilterImages(labelImages []images.Image, beforeImages []images.Image, sinceImages []images.Image) []images.Image {

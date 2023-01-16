@@ -21,7 +21,7 @@
 - [Kubernetes](#kubernetes)
   - [`nerdctl ps -a` does not show Kubernetes containers](#nerdctl-ps--a-does-not-show-kubernetes-containers)
   - [How to build an image for Kubernetes?](#how-to-build-an-image-for-kubernetes)
-- [containerd socket (`/run/containerd/containerd.sock`)](#containerd-socket-runcontainerdcontainerdsock)
+- [containerd socket address](#containerd-socket-address)
   - [Does nerdctl have an equivalent of `DOCKER_HOST=ssh://<USER>@<REMOTEHOST>` ?](#does-nerdctl-have-an-equivalent-of-docker_hostsshuserremotehost-)
   - [Does nerdctl have an equivalent of `sudo usermod -aG docker <USER>` ?](#does-nerdctl-have-an-equivalent-of-sudo-usermod--ag-docker-user-)
 - [Rootless](#rootless)
@@ -48,7 +48,7 @@ Note that competing with Docker is _not_ the goal of nerdctl. Those cutting-edge
 
 ### How is nerdctl different from `ctr` and `crictl` ?
 
-[`ctr`](https://github.com/containerd/containerd/tree/master/cmd/ctr) is a debugging utility bundled with containerd.
+[`ctr`](https://github.com/containerd/containerd/tree/main/cmd/ctr) is a debugging utility bundled with containerd.
 
 ctr is incompatible with Docker CLI, and not friendly to users.
 
@@ -268,7 +268,10 @@ spec:
 EOF
 ```
 
-## containerd socket (`/run/containerd/containerd.sock`)
+## containerd socket address
+
+- rootful: `/run/containerd/containerd.sock`
+- rootless (e.g., default [Lima](https://github.com/lima-vm/lima) instance): `/proc/<PID of containerd>/root/run/containerd/containerd.sock`, or you can run this command to find out: `echo /proc/$(cat $XDG_RUNTIME_DIR/containerd-rootless/child_pid)/root/run/containerd/containerd.sock` (why it works:  [`rootlessutil.ParentMain`](https://github.com/containerd/nerdctl/blob/b160d8173fb765b76cf0920d26621843d377bc3f/pkg/rootlessutil/parent.go#L66))
 
 ### Does nerdctl have an equivalent of `DOCKER_HOST=ssh://<USER>@<REMOTEHOST>` ?
 

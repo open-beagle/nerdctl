@@ -17,7 +17,7 @@
 package jsonfile
 
 import (
-	"bufio"
+	"container/ring"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,30 +44,24 @@ func Path(dataStore, ns, id string) string {
 	return filepath.Join(dataStore, "containers", ns, id, id+"-json.log")
 }
 
-func Encode(w io.WriteCloser, stdout, stderr io.Reader) error {
-	enc := json.NewEncoder(w)
+func Encoode(stdout <-chan string, stderr <-chan string, writer io.Writer) error {
+	enc := json.NewEncoder(writer)
 	var encMu sync.Mutex
 	var wg sync.WaitGroup
 	wg.Add(2)
-	f := func(r io.Reader, name string) {
+	f := func(dataChan <-chan string, name string) {
 		defer wg.Done()
-		br := bufio.NewReader(r)
 		e := &Entry{
 			Stream: name,
 		}
-		for {
-			line, err := br.ReadString(byte('\n'))
-			if err != nil {
-				logrus.WithError(err).Errorf("failed to read line from %q", name)
-				return
-			}
-			e.Log = line
+		for log := range dataChan {
+			e.Log = log + "\n"
 			e.Time = time.Now().UTC()
 			encMu.Lock()
 			encErr := enc.Encode(e)
 			encMu.Unlock()
 			if encErr != nil {
-				logrus.WithError(err).Errorf("failed to encode JSON")
+				logrus.WithError(encErr).Errorf("failed to encode JSON")
 				return
 			}
 		}
@@ -78,7 +72,69 @@ func Encode(w io.WriteCloser, stdout, stderr io.Reader) error {
 	return nil
 }
 
-func Decode(stdout, stderr io.Writer, r io.Reader, timestamps bool, since string, until string) error {
+func writeEntry(e *Entry, stdout, stderr io.Writer, refTime time.Time, timestamps bool, since string, until string) error {
+	output := []byte{}
+
+	if since != "" {
+		ts, err := timetypes.GetTimestamp(since, refTime)
+		if err != nil {
+			return fmt.Errorf("invalid value for \"since\": %w", err)
+		}
+		v := strings.Split(ts, ".")
+		i, err := strconv.ParseInt(v[0], 10, 64)
+		if err != nil {
+			return err
+		}
+		if e.Time.Before(time.Unix(i, 0)) {
+			return nil
+		}
+	}
+
+	if until != "" {
+		ts, err := timetypes.GetTimestamp(until, refTime)
+		if err != nil {
+			return fmt.Errorf("invalid value for \"until\": %w", err)
+		}
+		v := strings.Split(ts, ".")
+		i, err := strconv.ParseInt(v[0], 10, 64)
+		if err != nil {
+			return err
+		}
+		if e.Time.After(time.Unix(i, 0)) {
+			return nil
+		}
+	}
+
+	if timestamps {
+		output = append(output, []byte(e.Time.Format(time.RFC3339Nano))...)
+		output = append(output, ' ')
+	}
+
+	output = append(output, []byte(e.Log)...)
+
+	var writeTo io.Writer
+	switch e.Stream {
+	case "stdout":
+		writeTo = stdout
+	case "stderr":
+		writeTo = stderr
+	default:
+		logrus.Errorf("unknown stream name %q, entry=%+v", e.Stream, e)
+	}
+
+	if writeTo != nil {
+		_, err := writeTo.Write(output)
+		return err
+	}
+	return nil
+}
+
+func Decode(stdout, stderr io.Writer, r io.Reader, timestamps bool, since string, until string, tail uint) error {
+	var buff *ring.Ring
+	if tail != 0 {
+		buff = ring.New(int(tail))
+	}
+
 	dec := json.NewDecoder(r)
 	now := time.Now()
 	for {
@@ -89,53 +145,38 @@ func Decode(stdout, stderr io.Writer, r io.Reader, timestamps bool, since string
 			return err
 		}
 
-		output := []byte{}
-
-		if since != "" {
-			ts, err := timetypes.GetTimestamp(since, now)
+		if buff == nil {
+			// Write out the entry directly
+			err := writeEntry(&e, stdout, stderr, now, timestamps, since, until)
 			if err != nil {
-				return fmt.Errorf("invalid value for \"since\": %w", err)
+				logrus.Errorf("error while writing log entry to output stream: %s", err)
 			}
-			v := strings.Split(ts, ".")
-			i, err := strconv.ParseInt(v[0], 10, 64)
+		} else {
+			// Else place the entry in a ring buffer
+			buff.Value = &e
+			buff = buff.Next()
+		}
+	}
+
+	if buff != nil {
+		// The ring should now contain up to `tail` elements and be set to
+		// internally point to the oldest element in the ring.
+		buff.Do(func(e interface{}) {
+			if e == nil {
+				// unallocated ring element
+				return
+			}
+			cast, ok := e.(*Entry)
+			if !ok {
+				logrus.Errorf("failed to cast Entry struct: %#v", e)
+				return
+			}
+
+			err := writeEntry(cast, stdout, stderr, now, timestamps, since, until)
 			if err != nil {
-				return err
+				logrus.Errorf("error while writing log entry to output stream: %s", err)
 			}
-			if !e.Time.After(time.Unix(i, 0)) {
-				continue
-			}
-		}
-
-		if until != "" {
-			ts, err := timetypes.GetTimestamp(until, now)
-			if err != nil {
-				return fmt.Errorf("invalid value for \"until\": %w", err)
-			}
-			v := strings.Split(ts, ".")
-			i, err := strconv.ParseInt(v[0], 10, 64)
-			if err != nil {
-				return err
-			}
-			if !e.Time.Before(time.Unix(i, 0)) {
-				continue
-			}
-		}
-
-		if timestamps {
-			output = append(output, []byte(e.Time.Format(time.RFC3339Nano))...)
-			output = append(output, ' ')
-		}
-
-		output = append(output, []byte(e.Log)...)
-
-		switch e.Stream {
-		case "stdout":
-			stdout.Write(output)
-		case "stderr":
-			stderr.Write(output)
-		default:
-			logrus.Errorf("unknown stream name %q, entry=%+v", e.Stream, e)
-		}
+		})
 	}
 	return nil
 }

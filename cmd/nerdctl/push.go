@@ -17,18 +17,16 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
 
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/images/converter"
 	refdocker "github.com/containerd/containerd/reference/docker"
 	"github.com/containerd/containerd/remotes"
+	"github.com/containerd/nerdctl/pkg/cosignutil"
 	"github.com/containerd/nerdctl/pkg/errutil"
 	"github.com/containerd/nerdctl/pkg/imgutil/dockerconfigresolver"
 	"github.com/containerd/nerdctl/pkg/imgutil/push"
@@ -52,9 +50,9 @@ const (
 
 func newPushCommand() *cobra.Command {
 	var pushCommand = &cobra.Command{
-		Use:               "push NAME[:TAG]",
+		Use:               "push [flags] NAME[:TAG]",
 		Short:             "Push an image or a repository to a registry. Optionally specify \"ipfs://\" or \"ipns://\" scheme to push image to IPFS.",
-		Args:              cobra.ExactArgs(1),
+		Args:              IsExactArgs(1),
 		RunE:              pushAction,
 		ValidArgsFunction: pushShellComplete,
 		SilenceUsage:      true,
@@ -226,11 +224,10 @@ func pushAction(cmd *cobra.Command, args []string) error {
 				return err
 			}
 			return pushFunc(resolver)
-		} else {
-			logrus.WithError(err).Errorf("server %q does not seem to support HTTPS", refDomain)
-			logrus.Info("Hint: you may want to try --insecure-registry to allow plain HTTP (if you are in a trusted network)")
-			return err
 		}
+		logrus.WithError(err).Errorf("server %q does not seem to support HTTPS", refDomain)
+		logrus.Info("Hint: you may want to try --insecure-registry to allow plain HTTP (if you are in a trusted network)")
+		return err
 	}
 
 	signer, err := cmd.Flags().GetString("sign")
@@ -254,7 +251,7 @@ func pushAction(cmd *cobra.Command, args []string) error {
 			return err
 		}
 
-		err = signCosign(rawRef, keyRef)
+		err = cosignutil.SignCosign(rawRef, keyRef)
 		if err != nil {
 			return err
 		}
@@ -312,48 +309,4 @@ func isReusableESGZ(ctx context.Context, cs content.Store, desc ocispec.Descript
 		return false
 	}
 	return true
-}
-
-func signCosign(rawRef string, keyRef string) error {
-	cosignExecutable, err := exec.LookPath("cosign")
-	if err != nil {
-		logrus.WithError(err).Error("cosign executable not found in path $PATH")
-		logrus.Info("you might consider installing cosign from: https://docs.sigstore.dev/cosign/installation")
-		return err
-	}
-
-	cosignCmd := exec.Command(cosignExecutable, []string{"sign"}...)
-	cosignCmd.Env = os.Environ()
-
-	if keyRef != "" {
-		cosignCmd.Args = append(cosignCmd.Args, "--key", keyRef)
-	} else {
-		cosignCmd.Env = append(cosignCmd.Env, "COSIGN_EXPERIMENTAL=true")
-	}
-
-	cosignCmd.Args = append(cosignCmd.Args, rawRef)
-
-	logrus.Debugf("running %s %v", cosignExecutable, cosignCmd.Args)
-
-	stdout, _ := cosignCmd.StdoutPipe()
-	stderr, _ := cosignCmd.StderrPipe()
-	if err := cosignCmd.Start(); err != nil {
-		return err
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		logrus.Info("cosign: " + scanner.Text())
-	}
-
-	errScanner := bufio.NewScanner(stderr)
-	for errScanner.Scan() {
-		logrus.Info("cosign: " + errScanner.Text())
-	}
-
-	if err := cosignCmd.Wait(); err != nil {
-		return err
-	}
-
-	return nil
 }

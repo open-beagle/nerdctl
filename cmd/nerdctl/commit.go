@@ -33,7 +33,7 @@ func newCommitCommand() *cobra.Command {
 	var commitCommand = &cobra.Command{
 		Use:               "commit [flags] CONTAINER REPOSITORY[:TAG]",
 		Short:             "Create a new image from a container's changes",
-		Args:              cobra.ExactArgs(2),
+		Args:              IsExactArgs(2),
 		RunE:              commitAction,
 		ValidArgsFunction: commitShellComplete,
 		SilenceUsage:      true,
@@ -163,7 +163,6 @@ func newCommitOpts(cmd *cobra.Command, args []string) (*commit.Opts, error) {
 func commitShellComplete(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) == 0 {
 		return shellCompleteContainerNames(cmd, nil)
-	} else {
-		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
+	return nil, cobra.ShellCompDirectiveNoFileComp
 }

@@ -219,7 +219,7 @@ func printContainers(ctx context.Context, client *containerd.Client, cmd *cobra.
 		}
 
 		p := containerPrintable{
-			Command:   formatter.InspectContainerCommand(spec, trunc),
+			Command:   formatter.InspectContainerCommand(spec, trunc, true),
 			CreatedAt: info.CreatedAt.Round(time.Second).Local().String(), // format like "2021-08-07 02:19:45 +0900 JST"
 			ID:        id,
 			Image:     imageName,
@@ -293,10 +293,9 @@ func getPrintableContainerName(containerLabels map[string]string) string {
 			if containerName, ok := containerLabels[k8slabels.ContainerName]; ok {
 				// Container
 				return fmt.Sprintf("k8s://%s/%s/%s", ns, podName, containerName)
-			} else {
-				// Pod sandbox
-				return fmt.Sprintf("k8s://%s/%s", ns, podName)
 			}
+			// Pod sandbox
+			return fmt.Sprintf("k8s://%s/%s", ns, podName)
 		}
 	}
 	return ""

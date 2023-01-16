@@ -29,9 +29,9 @@ import (
 
 func newTagCommand() *cobra.Command {
 	var tagCommand = &cobra.Command{
-		Use:               "tag SOURCE_IMAGE[:TAG] TARGET_IMAGE[:TAG]",
+		Use:               "tag [flags] SOURCE_IMAGE[:TAG] TARGET_IMAGE[:TAG]",
 		Short:             "Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE",
-		Args:              cobra.ExactArgs(2),
+		Args:              IsExactArgs(2),
 		RunE:              tagAction,
 		ValidArgsFunction: tagShellComplete,
 		SilenceUsage:      true,
@@ -101,7 +101,6 @@ func tagShellComplete(cmd *cobra.Command, args []string, toComplete string) ([]s
 	if len(args) < 2 {
 		// show image names
 		return shellCompleteImageNames(cmd)
-	} else {
-		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
+	return nil, cobra.ShellCompDirectiveNoFileComp
 }

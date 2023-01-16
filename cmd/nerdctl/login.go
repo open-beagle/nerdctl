@@ -26,7 +26,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"syscall"
 
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/remotes/docker"
@@ -36,7 +35,6 @@ import (
 	dockercliconfig "github.com/docker/cli/cli/config"
 	dockercliconfigtypes "github.com/docker/cli/cli/config/types"
 	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/registry"
 	"golang.org/x/net/context/ctxhttp"
 	"golang.org/x/term"
 
@@ -62,7 +60,7 @@ func newLoginCommand() *cobra.Command {
 	var loginCommand = &cobra.Command{
 		Use:           "login [flags] [SERVER]",
 		Args:          cobra.MaximumNArgs(1),
-		Short:         "Log in to a Docker registry",
+		Short:         "Log in to a container registry",
 		RunE:          loginAction,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -89,14 +87,14 @@ func loginAction(cmd *cobra.Command, args []string) error {
 	var serverAddress string
 
 	if options.serverAddress == "" {
-		serverAddress = registry.IndexServer
+		serverAddress = dockerconfigresolver.IndexServer
 	} else {
 		serverAddress = options.serverAddress
 	}
 
 	var responseIdentityToken string
 	ctx := cmd.Context()
-	isDefaultRegistry := serverAddress == registry.IndexServer
+	isDefaultRegistry := serverAddress == dockerconfigresolver.IndexServer
 
 	authConfig, err := GetDefaultAuthConfig(options.username == "" && options.password == "", serverAddress, isDefaultRegistry)
 	if authConfig == nil {
@@ -362,7 +360,7 @@ func ConfigureAuthentication(authConfig *types.AuthConfig, options *loginOptions
 
 func readUsername() (string, error) {
 	var fd *os.File
-	if term.IsTerminal(int(syscall.Stdin)) {
+	if term.IsTerminal(int(os.Stdin.Fd())) {
 		fd = os.Stdin
 	} else {
 		return "", fmt.Errorf("stdin is not a terminal (Hint: use `nerdctl login --username=USERNAME --password-stdin`)")
