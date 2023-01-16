@@ -33,7 +33,7 @@ require (
 	github.com/ipfs/go-ipfs-files v0.2.0
 	github.com/ipfs/go-ipfs-http-client v0.4.0
 	github.com/ipfs/interface-go-ipfs-core v0.8.0
-	github.com/mattn/go-isatty v0.0.16
+	github.com/mattn/go-isatty v0.0.17
 	github.com/moby/sys/mount v0.3.3
 	github.com/multiformats/go-multiaddr v0.8.0
 	github.com/opencontainers/go-digest v1.0.0
