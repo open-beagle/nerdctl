@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/containerd/nerdctl/pkg/clientutil"
 	"github.com/containerd/nerdctl/pkg/ocihook"
 
 	"github.com/spf13/cobra"
@@ -37,6 +38,10 @@ func newInternalOCIHookCommandCommand() *cobra.Command {
 }
 
 func internalOCIHookAction(cmd *cobra.Command, args []string) error {
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return err
+	}
 	event := ""
 	if len(args) > 0 {
 		event = args[0]
@@ -44,18 +49,12 @@ func internalOCIHookAction(cmd *cobra.Command, args []string) error {
 	if event == "" {
 		return errors.New("event type needs to be passed")
 	}
-	dataStore, err := getDataStore(cmd)
+	dataStore, err := clientutil.DataStore(globalOptions.DataRoot, globalOptions.Address)
 	if err != nil {
 		return err
 	}
-	cniPath, err := cmd.Flags().GetString("cni-path")
-	if err != nil {
-		return err
-	}
-	cniNetconfpath, err := cmd.Flags().GetString("cni-netconfpath")
-	if err != nil {
-		return err
-	}
+	cniPath := globalOptions.CNIPath
+	cniNetconfpath := globalOptions.CNINetConfPath
 	return ocihook.Run(os.Stdin, os.Stderr, event,
 		dataStore,
 		cniPath,

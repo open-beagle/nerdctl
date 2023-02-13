@@ -17,13 +17,8 @@
 package main
 
 import (
-	"fmt"
-	"net/http"
-
-	"github.com/containerd/nerdctl/pkg/ipfs"
-	httpapi "github.com/ipfs/go-ipfs-http-client"
-	"github.com/multiformats/go-multiaddr"
-	"github.com/sirupsen/logrus"
+	"github.com/containerd/nerdctl/pkg/api/types"
+	"github.com/containerd/nerdctl/pkg/cmd/ipfs"
 	"github.com/spf13/cobra"
 )
 
@@ -36,61 +31,49 @@ const (
 func newIPFSRegistryServeCommand() *cobra.Command {
 	var ipfsRegistryServeCommand = &cobra.Command{
 		Use:           "serve",
-		Short:         "serve read-only registry backed by IPFS on localhost. Use \"nerdctl ipfs registry up\".",
+		Short:         "serve read-only registry backed by IPFS on localhost.",
 		RunE:          ipfsRegistryServeAction,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 
-	ipfsRegistryServeCommand.PersistentFlags().String("listen-registry", defaultIPFSRegistry, "address to listen")
-	ipfsRegistryServeCommand.PersistentFlags().String("ipfs-address", "", "multiaddr of IPFS API (default is pulled from $IPFS_PATH/api file. If $IPFS_PATH env var is not present, it defaults to ~/.ipfs)")
-	ipfsRegistryServeCommand.PersistentFlags().Int("read-retry-num", defaultIPFSReadRetryNum, "times to retry query on IPFS. Zero or lower means no retry.")
-	ipfsRegistryServeCommand.PersistentFlags().Duration("read-timeout", defaultIPFSReadTimeoutDuration, "timeout duration of a read request to IPFS. Zero means no timeout.")
+	AddStringFlag(ipfsRegistryServeCommand, "listen-registry", nil, defaultIPFSRegistry, "IPFS_REGISTRY_SERVE_LISTEN_REGISTRY", "address to listen")
+	AddStringFlag(ipfsRegistryServeCommand, "ipfs-address", nil, "", "IPFS_REGISTRY_SERVE_IPFS_ADDRESS", "multiaddr of IPFS API (default is pulled from $IPFS_PATH/api file. If $IPFS_PATH env var is not present, it defaults to ~/.ipfs)")
+	AddIntFlag(ipfsRegistryServeCommand, "read-retry-num", nil, defaultIPFSReadRetryNum, "IPFS_REGISTRY_SERVE_READ_RETRY_NUM", "times to retry query on IPFS. Zero or lower means no retry.")
+	AddDurationFlag(ipfsRegistryServeCommand, "read-timeout", nil, defaultIPFSReadTimeoutDuration, "IPFS_REGISTRY_SERVE_READ_TIMEOUT", "timeout duration of a read request to IPFS. Zero means no timeout.")
 
 	return ipfsRegistryServeCommand
 }
 
-func ipfsRegistryServeAction(cmd *cobra.Command, args []string) error {
+func processIPFSRegistryServeOptions(cmd *cobra.Command) (opts types.IPFSRegistryServeOptions, err error) {
 	ipfsAddressStr, err := cmd.Flags().GetString("ipfs-address")
 	if err != nil {
-		return err
+		return types.IPFSRegistryServeOptions{}, err
 	}
 	listenAddress, err := cmd.Flags().GetString("listen-registry")
 	if err != nil {
-		return err
+		return types.IPFSRegistryServeOptions{}, err
 	}
 	readTimeout, err := cmd.Flags().GetDuration("read-timeout")
 	if err != nil {
-		return err
+		return types.IPFSRegistryServeOptions{}, err
 	}
 	readRetryNum, err := cmd.Flags().GetInt("read-retry-num")
 	if err != nil {
-		return err
+		return types.IPFSRegistryServeOptions{}, err
 	}
-	var ipfsClient *httpapi.HttpApi
-	if ipfsAddressStr != "" {
-		a, err := multiaddr.NewMultiaddr(ipfsAddressStr)
-		if err != nil {
-			return err
-		}
-		ipfsClient, err = httpapi.NewApi(a)
-		if err != nil {
-			return err
-		}
-	} else {
-		ipfsClient, err = httpapi.NewLocalApi()
-		if err != nil {
-			return fmt.Errorf("error encountered, '%w', Please setup ipfs daemon, see https://github.com/containerd/nerdctl/blob/main/docs/ipfs.md", err)
-		}
-	}
-	h, err := ipfs.NewRegistry(ipfsClient, ipfs.RegistryOptions{
-		ReadRetryNum: readRetryNum,
-		ReadTimeout:  readTimeout,
-	})
+	return types.IPFSRegistryServeOptions{
+		ListenRegistry: listenAddress,
+		IPFSAddress:    ipfsAddressStr,
+		ReadTimeout:    readTimeout,
+		ReadRetryNum:   readRetryNum,
+	}, nil
+}
+
+func ipfsRegistryServeAction(cmd *cobra.Command, args []string) error {
+	options, err := processIPFSRegistryServeOptions(cmd)
 	if err != nil {
 		return err
 	}
-	logrus.Infof("serving on %v", listenAddress)
-	http.Handle("/", h)
-	return http.ListenAndServe(listenAddress, nil)
+	return ipfs.RegistryServe(options)
 }

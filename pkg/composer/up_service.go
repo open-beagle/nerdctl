@@ -39,7 +39,7 @@ func (c *Composer) upServices(ctx context.Context, parsedServices []*servicepars
 
 	// TODO: parallelize loop for ensuring images (make sure not to mess up tty)
 	for _, ps := range parsedServices {
-		if err := c.ensureServiceImage(ctx, ps, !uo.NoBuild, uo.ForceBuild, BuildOptions{IPFS: uo.IPFS}, uo.QuietPull); err != nil {
+		if err := c.ensureServiceImage(ctx, ps, !uo.NoBuild, uo.ForceBuild, BuildOptions{}, uo.QuietPull); err != nil {
 			return err
 		}
 	}
@@ -48,10 +48,10 @@ func (c *Composer) upServices(ctx context.Context, parsedServices []*servicepars
 		containers   = make(map[string]serviceparser.Container) // key: container ID
 		services     = []string{}
 		containersMu sync.Mutex
-		runEG        errgroup.Group
 	)
 	for _, ps := range parsedServices {
 		ps := ps
+		var runEG errgroup.Group
 		services = append(services, ps.Unparsed.Name)
 		for _, container := range ps.Containers {
 			container := container
@@ -66,9 +66,9 @@ func (c *Composer) upServices(ctx context.Context, parsedServices []*servicepars
 				return nil
 			})
 		}
-	}
-	if err := runEG.Wait(); err != nil {
-		return err
+		if err := runEG.Wait(); err != nil {
+			return err
+		}
 	}
 
 	if uo.Detach {
@@ -140,8 +140,10 @@ func (c *Composer) upServiceContainer(ctx context.Context, service *serviceparse
 	defer os.RemoveAll(tempDir)
 	cidFilename := filepath.Join(tempDir, "cid")
 
-	if container.Detached && !service.Unparsed.StdinOpen && !service.Unparsed.Tty {
+	var runFlagD bool
+	if !service.Unparsed.StdinOpen && !service.Unparsed.Tty {
 		container.RunArgs = append([]string{"-d"}, container.RunArgs...)
+		runFlagD = true
 	}
 
 	//add metadata labels to container https://github.com/compose-spec/compose-spec/blob/master/spec.md#labels
@@ -164,11 +166,11 @@ func (c *Composer) upServiceContainer(ctx context.Context, service *serviceparse
 	if service.Unparsed.StdinOpen {
 		cmd.Stdin = os.Stdin
 	}
-
-	if !container.Detached {
+	if !runFlagD {
 		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
 	}
+	// Always propagate stderr to print detailed error messages (https://github.com/containerd/nerdctl/issues/1942)
+	cmd.Stderr = os.Stderr
 
 	err = cmd.Run()
 	if err != nil {

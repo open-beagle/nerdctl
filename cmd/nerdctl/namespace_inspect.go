@@ -17,8 +17,9 @@
 package main
 
 import (
-	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/nerdctl/pkg/inspecttypes/native"
+	"github.com/containerd/nerdctl/pkg/api/types"
+	"github.com/containerd/nerdctl/pkg/clientutil"
+	"github.com/containerd/nerdctl/pkg/cmd/namespace"
 	"github.com/spf13/cobra"
 )
 
@@ -38,25 +39,33 @@ func newNamespaceInspectCommand() *cobra.Command {
 	return namespaceInspectCommand
 }
 
+func processNamespaceInspectOptions(cmd *cobra.Command) (types.NamespaceInspectOptions, error) {
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return types.NamespaceInspectOptions{}, err
+	}
+	format, err := cmd.Flags().GetString("format")
+	if err != nil {
+		return types.NamespaceInspectOptions{}, err
+	}
+	return types.NamespaceInspectOptions{
+		GOptions: globalOptions,
+		Format:   format,
+		Stdout:   cmd.OutOrStdout(),
+	}, nil
+}
+
 func labelInspectAction(cmd *cobra.Command, args []string) error {
-	client, ctx, cancel, err := newClient(cmd)
+	options, err := processNamespaceInspectOptions(cmd)
+	if err != nil {
+		return err
+	}
+
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), options.GOptions.Namespace, options.GOptions.Address)
 	if err != nil {
 		return err
 	}
 	defer cancel()
 
-	result := make([]interface{}, len(args))
-	for index, ns := range args {
-		ctx = namespaces.WithNamespace(ctx, ns)
-		labels, err := client.NamespaceService().Labels(ctx, ns)
-		if err != nil {
-			return err
-		}
-		nsInspect := native.Namespace{
-			Name:   ns,
-			Labels: &labels,
-		}
-		result[index] = nsInspect
-	}
-	return formatSlice(cmd, result)
+	return namespace.Inspect(ctx, client, args, options)
 }

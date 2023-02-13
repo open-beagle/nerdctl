@@ -17,6 +17,8 @@
 package main
 
 import (
+	"github.com/containerd/nerdctl/pkg/clientutil"
+	"github.com/containerd/nerdctl/pkg/cmd/compose"
 	"github.com/containerd/nerdctl/pkg/composer"
 	"github.com/spf13/cobra"
 )
@@ -33,12 +35,14 @@ func newComposeBuildCommand() *cobra.Command {
 	composeBuildCommand.Flags().Bool("no-cache", false, "Do not use cache when building the image.")
 	composeBuildCommand.Flags().String("progress", "", "Set type of progress output (auto, plain, tty). Use plain to show container output")
 
-	composeBuildCommand.Flags().Bool("ipfs", false, "Allow pulling base images from IPFS during build")
-
 	return composeBuildCommand
 }
 
 func composeBuildAction(cmd *cobra.Command, args []string) error {
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return err
+	}
 	buildArg, err := cmd.Flags().GetStringArray("build-arg")
 	if err != nil {
 		return err
@@ -51,18 +55,17 @@ func composeBuildAction(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	enableIPFS, err := cmd.Flags().GetBool("ipfs")
-	if err != nil {
-		return err
-	}
 
-	client, ctx, cancel, err := newClient(cmd)
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), globalOptions.Namespace, globalOptions.Address)
 	if err != nil {
 		return err
 	}
 	defer cancel()
-
-	c, err := getComposer(cmd, client)
+	options, err := getComposeOptions(cmd, globalOptions.DebugFull, globalOptions.Experimental)
+	if err != nil {
+		return err
+	}
+	c, err := compose.New(client, globalOptions, options, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return err
 	}
@@ -70,7 +73,6 @@ func composeBuildAction(cmd *cobra.Command, args []string) error {
 		Args:     buildArg,
 		NoCache:  noCache,
 		Progress: progress,
-		IPFS:     enableIPFS,
 	}
 	return c.Build(ctx, bo, args)
 }

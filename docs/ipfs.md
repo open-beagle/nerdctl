@@ -9,7 +9,9 @@ IPFS support is completely optional. Your host is NOT connected to any P2P netwo
 
 ## Prerequisites
 
-To use this feature, make sure an IPFS daemon such as [Kubo](https://github.com/ipfs/kubo) (former go-ipfs) is running on your host.
+### ipfs daemon
+
+Make sure an IPFS daemon such as [Kubo](https://github.com/ipfs/kubo) (former go-ipfs) is running on your host.
 For example, you can run Kubo using the following command.
 
 ```
@@ -22,9 +24,13 @@ In rootless mode, you need to install ipfs daemon using `containerd-rootless-set
 containerd-rootless-setuptool.sh -- install-ipfs --init
 ```
 
+> NOTE: correctly set IPFS_PATH as described in the output of the above command.
+
 :information_source: If you want to expose some ports of ipfs daemon (e.g. 4001), you can install rootless containerd using `containerd-rootless-setuptool.sh install` with `CONTAINERD_ROOTLESS_ROOTLESSKIT_FLAGS="--publish=0.0.0.0:4001:4001/tcp"` environment variable.
 
 :information_source: If you don't want IPFS to communicate with nodes on the internet, you can run IPFS daemon in offline mode using `--offline` flag or you can create a private IPFS network as described [here](https://github.com/containerd/stargz-snapshotter/blob/main/docs/ipfs.md#appendix-1-creating-ipfs-private-network).
+
+:information_source: Instead of locally launching IPFS daemon, you can specify the address of the IPFS API using `--ipfs-address` flag.
 
 ## IPFS-enabled image and OCI Compatibility
 
@@ -124,10 +130,17 @@ FROM localhost:5050/ipfs/bafkreicq4dg6nkef5ju422ptedcwfz6kcvpvvhuqeykfrwq5krazf3
 RUN echo hello > /hello
 ```
 
-You can enable builds on IPFS using `--ipfs` option for `nerdctl build`.
+Make sure that `nerdctl ipfs registry serve` is running.
+This allows `nerdctl build` to pull images from IPFS.
+
+```
+$ nerdctl ipfs registry serve &
+```
+
+Then you can build this Dockerfile using `nerdctl build`.
 
 ```console
-> nerdctl build --ipfs -t hello .
+> nerdctl build -t hello .
 [+] Building 5.3s (6/6) FINISHED
  => [internal] load build definition from Dockerfile                                                                                              0.0s
  => => transferring dockerfile: 146B                                                                                                              0.0s
@@ -149,24 +162,48 @@ unpacking docker.io/library/hello:latest (sha256:b96d490d134221ab121af91a42b1319
 hello
 ```
 
-#### Details about `localhost:5050/ipfs/<CID>`
+> NOTE: `--ipfs` flag has been removed since v1.2.0. You need to launch the localhost registry by yourself using `nerdctl ipfs registry serve`.
+
+#### Details about `localhost:5050/ipfs/<CID>` and `nerdctl ipfs registry`
 
 As of now, BuildKit doesn't support `ipfs://` prefix so nerdctl achieves builds on IPFS by having a read-only local registry backed by IPFS.
 This registry converts registry API requests to IPFS operations.
 So IPFS-agnostic tools can pull images from IPFS via this registry.
 
-When you specify `--ipfs` option to `nerdctl build`, it automatically starts the registry backed by the IPFS repo of the current `$IPFS_PATH`.
-By default, nerdctl exposes the registry at `localhost:5050`.
-You can change the address and can manually restart the registry using `nerdctl ipfs registry up` and `nerdctl ipfs registry down`.
+This registry is provided as a subcommand `nerdctl ipfs registry`.
+This command starts the registry backed by the IPFS repo of the current `$IPFS_PATH`
+By default, nerdctl exposes the registry at `localhost:5050` (configurable via flags).
 
-The following example changes the registry API address to `localhost:5555` instead of `localhost:5050`.
+<details>
+<summary>Creating systemd unit file for `nerdctl ipfs registry`</summary>
+
+Optionally you can create systemd unit file of `nerdctl ipfs registry serve`.
+An example systemd unit file for `nerdctl ipfs registry serve` can be the following.
+`nerdctl ipfs registry serve` is aware of environemnt variables for configuring the behaviour (e.g. listening port) so you can use `EnvironmentFile` for configuring it.
 
 ```
-nerdctl ipfs registry down
-nerdctl ipfs registry up --listen-registry=localhost:5555
+[Unit]
+Description=nerdctl ipfs registry serve
+
+[Service]
+EnvironmentFile-=/run/nerdctl-ipfs-registry-serve/env
+ExecStart=nerdctl ipfs registry serve
+
+[Install]
+WantedBy=default.target
 ```
 
-You'll also need to restart the registry when you change `$IPFS_PATH` to use.
+</details>
+
+The following example starts the registry on `localhost:5555` instead of `localhost:5050`.
+
+```
+nerdctl ipfs registry serve --listen-registry=localhost:5555
+```
+
+> NOTE: You'll also need to restart the registry when you change `$IPFS_PATH` to use.
+
+> NOTE: `nerdctl ipfs registry [up|down]` has been removed since v1.2.0. You need to launch the localhost registry using `nerdctl ipfs registry serve` instead.
 
 ### Compose on IPFS
 
@@ -181,15 +218,16 @@ services:
 ```
 
 When you build images using base images on IPFS, you can use `localhost:5050/ipfs/<CID>` image reference in Dockerfile as mentioned above.
-You need to specify `--ipfs` option to `nerdctl compose build` or `nerdctl compose up` to enable builds on IPFS.
 
 ```
-nerdctl compose up --build --ipfs
+nerdctl compose up --build
 ```
 
 ```
-nerdctl compose build --ipfs
+nerdctl compose build
 ```
+
+> NOTE: `--ipfs` flag has been removed since v1.2.0. You need to launch the localhost registry by yourself using `nerdctl ipfs registry serve`.
 
 ### Encryption
 

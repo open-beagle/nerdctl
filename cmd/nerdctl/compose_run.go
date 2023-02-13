@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/containerd/nerdctl/pkg/clientutil"
+	"github.com/containerd/nerdctl/pkg/cmd/compose"
 	"github.com/containerd/nerdctl/pkg/composer"
 	"github.com/spf13/cobra"
 )
@@ -34,6 +36,7 @@ func newComposeRunCommand() *cobra.Command {
 		SilenceErrors:         true,
 		DisableFlagsInUseLine: true,
 	}
+	composeRunCommand.Flags().SetInterspersed(false)
 	composeRunCommand.Flags().BoolP("detach", "d", false, "Detached mode: Run containers in the background")
 	composeRunCommand.Flags().Bool("no-build", false, "Don't build an image, even if it's missing.")
 	composeRunCommand.Flags().Bool("no-color", false, "Produce monochrome output")
@@ -41,7 +44,6 @@ func newComposeRunCommand() *cobra.Command {
 	composeRunCommand.Flags().Bool("build", false, "Build images before starting containers.")
 	composeRunCommand.Flags().Bool("quiet-pull", false, "Pull without printing progress information")
 	composeRunCommand.Flags().Bool("remove-orphans", false, "Remove containers for services not defined in the Compose file.")
-	composeRunCommand.Flags().Bool("ipfs", false, "Allow pulling base images from IPFS during build")
 
 	composeRunCommand.Flags().String("name", "", "Assign a name to the container")
 	composeRunCommand.Flags().Bool("no-deps", false, "Don't start dependencies")
@@ -66,6 +68,10 @@ func newComposeRunCommand() *cobra.Command {
 }
 
 func composeRunAction(cmd *cobra.Command, args []string) error {
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return err
+	}
 	detach, err := cmd.Flags().GetBool("detach")
 	if err != nil {
 		return err
@@ -88,10 +94,6 @@ func composeRunAction(cmd *cobra.Command, args []string) error {
 	}
 	if build && noBuild {
 		return errors.New("--build and --no-build can not be combined")
-	}
-	enableIPFS, err := cmd.Flags().GetBool("ipfs")
-	if err != nil {
-		return err
 	}
 	quietPull, err := cmd.Flags().GetBool("quiet-pull")
 	if err != nil {
@@ -167,13 +169,16 @@ func composeRunAction(cmd *cobra.Command, args []string) error {
 		return errors.New("currently flag -t and -d cannot be specified together (FIXME)")
 	}
 
-	client, ctx, cancel, err := newClient(cmd)
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), globalOptions.Namespace, globalOptions.Address)
 	if err != nil {
 		return err
 	}
 	defer cancel()
-
-	c, err := getComposer(cmd, client)
+	options, err := getComposeOptions(cmd, globalOptions.DebugFull, globalOptions.Experimental)
+	if err != nil {
+		return err
+	}
+	c, err := compose.New(client, globalOptions, options, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return err
 	}
@@ -184,7 +189,6 @@ func composeRunAction(cmd *cobra.Command, args []string) error {
 		NoColor:       noColor,
 		NoLogPrefix:   noLogPrefix,
 		ForceBuild:    build,
-		IPFS:          enableIPFS,
 		QuietPull:     quietPull,
 		RemoveOrphans: removeOrphans,
 

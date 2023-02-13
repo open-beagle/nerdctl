@@ -23,6 +23,9 @@ import (
 	"os"
 	"text/template"
 
+	"github.com/containerd/nerdctl/pkg/api/types"
+	"github.com/containerd/nerdctl/pkg/clientutil"
+	"github.com/containerd/nerdctl/pkg/formatter"
 	"github.com/containerd/nerdctl/pkg/infoutil"
 	"github.com/containerd/nerdctl/pkg/inspecttypes/dockercompat"
 	"github.com/spf13/cobra"
@@ -47,20 +50,23 @@ func newVersionCommand() *cobra.Command {
 func versionAction(cmd *cobra.Command, args []string) error {
 	var w io.Writer = os.Stdout
 	var tmpl *template.Template
-
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return err
+	}
 	format, err := cmd.Flags().GetString("format")
 	if err != nil {
 		return err
 	}
 	if format != "" {
 		var err error
-		tmpl, err = parseTemplate(format)
+		tmpl, err = formatter.ParseTemplate(format)
 		if err != nil {
 			return err
 		}
 	}
 
-	v, vErr := versionInfo(cmd)
+	v, vErr := versionInfo(cmd, globalOptions)
 	if tmpl != nil {
 		var b bytes.Buffer
 		if err := tmpl.Execute(&b, v); err != nil {
@@ -97,11 +103,12 @@ func versionAction(cmd *cobra.Command, args []string) error {
 }
 
 // versionInfo may return partial VersionInfo on error
-func versionInfo(cmd *cobra.Command) (dockercompat.VersionInfo, error) {
+func versionInfo(cmd *cobra.Command, globalOptions types.GlobalCommandOptions) (dockercompat.VersionInfo, error) {
+
 	v := dockercompat.VersionInfo{
 		Client: infoutil.ClientVersion(),
 	}
-	client, ctx, cancel, err := newClient(cmd)
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), globalOptions.Namespace, globalOptions.Address)
 	if err != nil {
 		return v, err
 	}

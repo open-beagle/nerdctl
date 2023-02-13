@@ -23,14 +23,15 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/containerd/containerd"
-	"github.com/containerd/containerd/defaults"
-	"github.com/containerd/containerd/namespaces"
+	"github.com/containerd/nerdctl/pkg/config"
 	ncdefaults "github.com/containerd/nerdctl/pkg/defaults"
+	"github.com/containerd/nerdctl/pkg/errutil"
 	"github.com/containerd/nerdctl/pkg/logging"
 	"github.com/containerd/nerdctl/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/pkg/version"
+	"github.com/fatih/color"
 	"github.com/pelletier/go-toml"
 
 	"github.com/sirupsen/logrus"
@@ -41,6 +42,11 @@ import (
 const (
 	Category   = "category"
 	Management = "management"
+)
+
+var (
+	// To print Bold Text
+	Bold = color.New(color.Bold).SprintfFunc()
 )
 
 // usage was derived from https://github.com/spf13/cobra/blob/v1.2.1/command.go#L491-L514
@@ -79,6 +85,8 @@ func usage(c *cobra.Command) error {
 				longest = l
 			}
 		}
+
+		title = Bold(title)
 		t := title + ":\n"
 		for _, f := range commands {
 			t += "  "
@@ -92,7 +100,7 @@ func usage(c *cobra.Command) error {
 	s += printCommands("Management commands", managementCommands)
 	s += printCommands("Commands", nonManagementCommands)
 
-	s += "Flags:\n"
+	s += Bold("Flags") + ":\n"
 	s += c.LocalFlags().FlagUsages() + "\n"
 
 	if c == c.Root() {
@@ -106,7 +114,7 @@ func usage(c *cobra.Command) error {
 
 func main() {
 	if err := xmain(); err != nil {
-		HandleExitCoder(err)
+		errutil.HandleExitCoder(err)
 		logrus.Fatal(err)
 	}
 }
@@ -125,44 +133,8 @@ func xmain() error {
 	return app.Execute()
 }
 
-// Config corresponds to nerdctl.toml .
-// See docs/config.md .
-type Config struct {
-	Debug            bool     `toml:"debug"`
-	DebugFull        bool     `toml:"debug_full"`
-	Address          string   `toml:"address"`
-	Namespace        string   `toml:"namespace"`
-	Snapshotter      string   `toml:"snapshotter"`
-	CNIPath          string   `toml:"cni_path"`
-	CNINetConfPath   string   `toml:"cni_netconfpath"`
-	DataRoot         string   `toml:"data_root"`
-	CgroupManager    string   `toml:"cgroup_manager"`
-	InsecureRegistry bool     `toml:"insecure_registry"`
-	HostsDir         []string `toml:"hosts_dir"`
-	Experimental     bool     `toml:"experimental"`
-}
-
-// NewConfig creates a default Config object statically,
-// without interpolating CLI flags, env vars, and toml.
-func NewConfig() *Config {
-	return &Config{
-		Debug:            false,
-		DebugFull:        false,
-		Address:          defaults.DefaultAddress,
-		Namespace:        namespaces.Default,
-		Snapshotter:      containerd.DefaultSnapshotter,
-		CNIPath:          ncdefaults.CNIPath(),
-		CNINetConfPath:   ncdefaults.CNINetConfPath(),
-		DataRoot:         ncdefaults.DataRoot(),
-		CgroupManager:    ncdefaults.CgroupManager(),
-		InsecureRegistry: false,
-		HostsDir:         ncdefaults.HostsDirs(),
-		Experimental:     true,
-	}
-}
-
 func initRootCmdFlags(rootCmd *cobra.Command, tomlPath string) (*pflag.FlagSet, error) {
-	cfg := NewConfig()
+	cfg := config.New()
 	if r, err := os.Open(tomlPath); err == nil {
 		logrus.Debugf("Loading config from %q", tomlPath)
 		defer r.Close()
@@ -203,6 +175,7 @@ func initRootCmdFlags(rootCmd *cobra.Command, tomlPath string) (*pflag.FlagSet, 
 }
 
 func newApp() (*cobra.Command, error) {
+
 	tomlPath := ncdefaults.NerdctlTOML()
 	if v, ok := os.LookupEnv("NERDCTL_TOML"); ok {
 		tomlPath = v
@@ -230,27 +203,22 @@ Config file ($NERDCTL_TOML): %s
 	}
 
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
-		debug, err := cmd.Flags().GetBool("debug-full")
+		globalOptions, err := processRootCmdFlags(cmd)
 		if err != nil {
 			return err
 		}
+		debug := globalOptions.DebugFull
 		if !debug {
-			debug, err = cmd.Flags().GetBool("debug")
-			if err != nil {
-				return err
-			}
+			debug = globalOptions.Debug
 		}
 		if debug {
 			logrus.SetLevel(logrus.DebugLevel)
 		}
-		address := cmd.Flags().Lookup("address").Value.String()
+		address := globalOptions.Address
 		if strings.Contains(address, "://") && !strings.HasPrefix(address, "unix://") {
 			return fmt.Errorf("invalid address %q", address)
 		}
-		cgroupManager, err := cmd.Flags().GetString("cgroup-manager")
-		if err != nil {
-			return err
-		}
+		cgroupManager := globalOptions.CgroupManager
 		if runtime.GOOS == "linux" {
 			switch cgroupManager {
 			case "systemd", "cgroupfs", "none":
@@ -374,30 +342,6 @@ func globalFlags(cmd *cobra.Command) (string, []string) {
 	return args0, args
 }
 
-type ExitCoder interface {
-	error
-	ExitCode() int
-}
-
-type ExitCodeError struct {
-	error
-	exitCode int
-}
-
-func (e ExitCodeError) ExitCode() int {
-	return e.exitCode
-}
-
-func HandleExitCoder(err error) {
-	if err == nil {
-		return
-	}
-
-	if exitErr, ok := err.(ExitCoder); ok {
-		os.Exit(exitErr.ExitCode())
-	}
-}
-
 // unknownSubcommandAction is needed to let `nerdctl system non-existent-command` fail
 // https://github.com/containerd/nerdctl/issues/487
 //
@@ -435,6 +379,58 @@ func AddStringFlag(cmd *cobra.Command, name string, aliases []string, value stri
 			flags.StringVarP(p, a, a, value, aliasesUsage)
 		} else {
 			flags.StringVar(p, a, value, aliasesUsage)
+		}
+	}
+}
+
+// AddIntFlag is similar to cmd.Flags().Int but supports aliases and env var
+func AddIntFlag(cmd *cobra.Command, name string, aliases []string, value int, env, usage string) {
+	if env != "" {
+		usage = fmt.Sprintf("%s [$%s]", usage, env)
+	}
+	if envV, ok := os.LookupEnv(env); ok {
+		v, err := strconv.ParseInt(envV, 10, 64)
+		if err != nil {
+			logrus.WithError(err).Warnf("Invalid int value for `%s`", env)
+		}
+		value = int(v)
+	}
+	aliasesUsage := fmt.Sprintf("Alias of --%s", name)
+	p := new(int)
+	flags := cmd.Flags()
+	flags.IntVar(p, name, value, usage)
+	for _, a := range aliases {
+		if len(a) == 1 {
+			// pflag doesn't support short-only flags, so we have to register long one as well here
+			flags.IntVarP(p, a, a, value, aliasesUsage)
+		} else {
+			flags.IntVar(p, a, value, aliasesUsage)
+		}
+	}
+}
+
+// AddDurationFlag is similar to cmd.Flags().Duration but supports aliases and env var
+func AddDurationFlag(cmd *cobra.Command, name string, aliases []string, value time.Duration, env, usage string) {
+	if env != "" {
+		usage = fmt.Sprintf("%s [$%s]", usage, env)
+	}
+	if envV, ok := os.LookupEnv(env); ok {
+		var err error
+		value, err = time.ParseDuration(envV)
+		if err != nil {
+			logrus.WithError(err).Warnf("Invalid duration value for `%s`", env)
+		}
+	}
+	aliasesUsage := fmt.Sprintf("Alias of --%s", name)
+	p := new(time.Duration)
+	flags := cmd.Flags()
+	flags.DurationVar(p, name, value, usage)
+	for _, a := range aliases {
+		if len(a) == 1 {
+			// pflag doesn't support short-only flags, so we have to register long one as well here
+			flags.DurationVarP(p, a, a, value, aliasesUsage)
+		} else {
+			flags.DurationVar(p, a, value, aliasesUsage)
 		}
 	}
 }
@@ -562,11 +558,11 @@ func AddPersistentStringArrayFlag(cmd *cobra.Command, name string, aliases, nonP
 
 func checkExperimental(feature string) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		experimental, err := cmd.Flags().GetBool("experimental")
+		globalOptions, err := processRootCmdFlags(cmd)
 		if err != nil {
 			return err
 		}
-		if !experimental {
+		if !globalOptions.Experimental {
 			return fmt.Errorf("%s is experimental feature, you should enable experimental config", feature)
 		}
 		return nil

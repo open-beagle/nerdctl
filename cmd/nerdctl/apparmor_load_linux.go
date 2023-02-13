@@ -19,9 +19,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/containerd/containerd/contrib/apparmor"
+	"github.com/containerd/nerdctl/pkg/cmd/apparmor"
 	"github.com/containerd/nerdctl/pkg/defaults"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -38,6 +37,5 @@ func newApparmorLoadCommand() *cobra.Command {
 }
 
 func apparmorLoadAction(cmd *cobra.Command, args []string) error {
-	logrus.Infof("Loading profile %q", defaults.AppArmorProfileName)
-	return apparmor.LoadDefaultProfile(defaults.AppArmorProfileName)
+	return apparmor.Load()
 }

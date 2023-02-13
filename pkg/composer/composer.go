@@ -29,7 +29,6 @@ import (
 	"github.com/containerd/containerd/identifiers"
 	"github.com/containerd/nerdctl/pkg/composer/serviceparser"
 	"github.com/containerd/nerdctl/pkg/reflectutil"
-
 	"github.com/sirupsen/logrus"
 )
 
@@ -47,6 +46,7 @@ type Options struct {
 	EnsureImage      func(ctx context.Context, imageName, pullMode, platform string, ps *serviceparser.Service, quiet bool) error
 	DebugPrintFull   bool // full debug print, may leak secret env var to logs
 	Experimental     bool // enable experimental features
+	IPFSAddress      string
 }
 
 func New(o Options, client *containerd.Client) (*Composer, error) {
@@ -132,9 +132,10 @@ func (c *Composer) runNerdctlCmd(ctx context.Context, args ...string) error {
 	return nil
 }
 
-func (c *Composer) Services(ctx context.Context) ([]*serviceparser.Service, error) {
+// Services returns the parsed Service objects in dependency order.
+func (c *Composer) Services(ctx context.Context, svcs ...string) ([]*serviceparser.Service, error) {
 	var services []*serviceparser.Service
-	if err := c.project.WithServices(nil, func(svc compose.ServiceConfig) error {
+	if err := c.project.WithServices(svcs, func(svc compose.ServiceConfig) error {
 		parsed, err := serviceparser.Parse(c.project, svc)
 		if err != nil {
 			return err
@@ -147,9 +148,10 @@ func (c *Composer) Services(ctx context.Context) ([]*serviceparser.Service, erro
 	return services, nil
 }
 
-func (c *Composer) ServiceNames(services ...string) ([]string, error) {
+// ServiceNames returns service names in dependency order.
+func (c *Composer) ServiceNames(svcs ...string) ([]string, error) {
 	var names []string
-	if err := c.project.WithServices(services, func(svc compose.ServiceConfig) error {
+	if err := c.project.WithServices(svcs, func(svc compose.ServiceConfig) error {
 		names = append(names, svc.Name)
 		return nil
 	}); err != nil {

@@ -25,6 +25,8 @@ import (
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/pkg/progress"
 	"github.com/containerd/containerd/snapshots"
+	"github.com/containerd/nerdctl/pkg/clientutil"
+	"github.com/containerd/nerdctl/pkg/cmd/compose"
 	"github.com/containerd/nerdctl/pkg/imgutil"
 	"github.com/containerd/nerdctl/pkg/labels"
 	"github.com/containerd/nerdctl/pkg/strutil"
@@ -46,18 +48,26 @@ func newComposeImagesCommand() *cobra.Command {
 }
 
 func composeImagesAction(cmd *cobra.Command, args []string) error {
-	quiet, err := cmd.Flags().GetBool("quiet")
+	globalOptions, err := processRootCmdFlags(cmd)
 	if err != nil {
 		return err
 	}
 
-	client, ctx, cancel, err := newClient(cmd)
+	quiet, err := cmd.Flags().GetBool("quiet")
+	if err != nil {
+		return err
+	}
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), globalOptions.Namespace, globalOptions.Address)
 	if err != nil {
 		return err
 	}
 	defer cancel()
 
-	c, err := getComposer(cmd, client)
+	options, err := getComposeOptions(cmd, globalOptions.DebugFull, globalOptions.Experimental)
+	if err != nil {
+		return err
+	}
+	c, err := compose.New(client, globalOptions, options, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return err
 	}
@@ -76,11 +86,7 @@ func composeImagesAction(cmd *cobra.Command, args []string) error {
 		return printComposeImageIDs(ctx, containers)
 	}
 
-	snapshotter, err := cmd.Flags().GetString("snapshotter")
-	if err != nil {
-		return err
-	}
-	sn := client.SnapshotService(snapshotter)
+	sn := client.SnapshotService(globalOptions.Snapshotter)
 
 	return printComposeImages(ctx, cmd, containers, sn)
 }

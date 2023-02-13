@@ -23,12 +23,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/containerd/containerd/defaults"
 	"github.com/containerd/nerdctl/pkg/buildkitutil"
 	"github.com/containerd/nerdctl/pkg/infoutil"
 	"github.com/containerd/nerdctl/pkg/inspecttypes/dockercompat"
@@ -288,6 +290,29 @@ func (b *Base) InfoNative() native.Info {
 	}
 	return info
 }
+
+func (b *Base) ContainerdAddress() string {
+	b.T.Helper()
+	if GetTarget() != Nerdctl {
+		b.T.Skip("ContainerdAddress() should not be called for non-nerdctl target")
+	}
+	if os.Geteuid() == 0 {
+		return defaults.DefaultAddress
+	}
+	xdr, err := rootlessutil.XDGRuntimeDir()
+	if err != nil {
+		b.T.Log(err)
+		xdr = fmt.Sprintf("/run/user/%d", os.Geteuid())
+	}
+	pidFile := filepath.Join(xdr, "containerd-rootless", "child_pid")
+	pidB, err := os.ReadFile(pidFile)
+	if err != nil {
+		b.T.Fatal(err)
+	}
+	pidS := strings.TrimSpace(string(pidB))
+	return filepath.Join("/proc", pidS, "root", defaults.DefaultAddress)
+}
+
 func (b *Base) EnsureContainerStarted(con string) {
 	b.T.Helper()
 
@@ -359,13 +384,40 @@ func (c *Cmd) AssertCombinedOutContains(s string) {
 	assert.Assert(c.Base.T, strings.Contains(res.Combined(), s))
 }
 
+// AssertOutContainsAll checks if command output contains All strings in `strs`.
+func (c *Cmd) AssertOutContainsAll(strs ...string) {
+	c.Base.T.Helper()
+	fn := func(stdout string) error {
+		for _, s := range strs {
+			if !strings.Contains(stdout, s) {
+				return fmt.Errorf("expected stdout to contain %q", s)
+			}
+		}
+		return nil
+	}
+	c.AssertOutWithFunc(fn)
+}
+
+// AssertOutContainsAny checks if command output contains Any string in `strs`.
+func (c *Cmd) AssertOutContainsAny(strs ...string) {
+	c.Base.T.Helper()
+	fn := func(stdout string) error {
+		for _, s := range strs {
+			if strings.Contains(stdout, s) {
+				return nil
+			}
+		}
+		return fmt.Errorf("expected stdout to contain any of %q", strings.Join(strs, "|"))
+	}
+	c.AssertOutWithFunc(fn)
+}
+
 func (c *Cmd) AssertOutNotContains(s string) {
 	c.AssertOutWithFunc(func(stdout string) error {
 		if strings.Contains(stdout, s) {
 			return fmt.Errorf("expected stdout to not contain %q", s)
 		}
 		return nil
-
 	})
 }
 
@@ -567,6 +619,13 @@ func RequireSystemService(t testing.TB, sv string) {
 	cmd := exec.Command("systemctl", systemctlArgs...)
 	if err := cmd.Run(); err != nil {
 		t.Skipf("Service %q does not seem active: %v: %v", sv, cmd.Args, err)
+	}
+}
+
+// RequireExecutable skips tests when executable `name` is not present in PATH.
+func RequireExecutable(t testing.TB, name string) {
+	if _, err := exec.LookPath(name); err != nil {
+		t.Skipf("required executable doesn't exist in PATH: %s", name)
 	}
 }
 

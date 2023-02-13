@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/containerd/nerdctl/pkg/clientutil"
+	"github.com/containerd/nerdctl/pkg/cmd/compose"
 	"github.com/containerd/nerdctl/pkg/composer"
 	"github.com/spf13/cobra"
 )
@@ -40,6 +42,10 @@ func newComposePortCommand() *cobra.Command {
 }
 
 func composePortAction(cmd *cobra.Command, args []string) error {
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return err
+	}
 	index, err := cmd.Flags().GetInt("index")
 	if err != nil {
 		return err
@@ -66,13 +72,16 @@ func composePortAction(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unexpected port: %d", port)
 	}
 
-	client, ctx, cancel, err := newClient(cmd)
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), globalOptions.Namespace, globalOptions.Address)
 	if err != nil {
 		return err
 	}
 	defer cancel()
-
-	c, err := getComposer(cmd, client)
+	options, err := getComposeOptions(cmd, globalOptions.DebugFull, globalOptions.Experimental)
+	if err != nil {
+		return err
+	}
+	c, err := compose.New(client, globalOptions, options, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return err
 	}

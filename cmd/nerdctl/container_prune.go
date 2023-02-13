@@ -23,6 +23,9 @@ import (
 	"strings"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/nerdctl/pkg/api/types"
+	"github.com/containerd/nerdctl/pkg/clientutil"
+	"github.com/containerd/nerdctl/pkg/cmd/container"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -41,6 +44,10 @@ func newContainerPruneCommand() *cobra.Command {
 }
 
 func containerPruneAction(cmd *cobra.Command, _ []string) error {
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return err
+	}
 	force, err := cmd.Flags().GetBool("force")
 	if err != nil {
 		return err
@@ -58,32 +65,32 @@ func containerPruneAction(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	client, ctx, cancel, err := newClient(cmd)
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), globalOptions.Namespace, globalOptions.Address)
 	if err != nil {
 		return err
 	}
 	defer cancel()
 
-	return containerPrune(ctx, cmd, client)
+	return containerPrune(ctx, cmd, client, globalOptions)
 }
 
-func containerPrune(ctx context.Context, cmd *cobra.Command, client *containerd.Client) error {
+func containerPrune(ctx context.Context, cmd *cobra.Command, client *containerd.Client, globalOptions types.GlobalCommandOptions) error {
 	containers, err := client.Containers(ctx)
 	if err != nil {
 		return err
 	}
 
 	var deleted []string
-	for _, container := range containers {
-		err = removeContainer(ctx, cmd, container, false, true)
+	for _, c := range containers {
+		err = container.RemoveContainer(ctx, c, globalOptions, false, true)
 		if err == nil {
-			deleted = append(deleted, container.ID())
+			deleted = append(deleted, c.ID())
 			continue
 		}
-		if errors.As(err, &statusError{}) {
+		if errors.As(err, &container.ErrContainerStatus{}) {
 			continue
 		}
-		logrus.WithError(err).Warnf("failed to remove container %s", container.ID())
+		logrus.WithError(err).Warnf("failed to remove container %s", c.ID())
 	}
 
 	if len(deleted) > 0 {

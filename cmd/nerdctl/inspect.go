@@ -20,6 +20,10 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/containerd/nerdctl/pkg/api/types"
+	"github.com/containerd/nerdctl/pkg/clientutil"
+	"github.com/containerd/nerdctl/pkg/cmd/container"
+	"github.com/containerd/nerdctl/pkg/cmd/image"
 	"github.com/containerd/nerdctl/pkg/idutil/containerwalker"
 	"github.com/containerd/nerdctl/pkg/idutil/imagewalker"
 
@@ -63,6 +67,12 @@ func addInspectFlags(cmd *cobra.Command) {
 }
 
 func inspectAction(cmd *cobra.Command, args []string) error {
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return err
+	}
+	namespace := globalOptions.Namespace
+	address := globalOptions.Address
 	inspectType, err := cmd.Flags().GetString("type")
 	if err != nil {
 		return err
@@ -72,7 +82,9 @@ func inspectAction(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("%q is not a valid value for --type", inspectType)
 	}
 
-	client, ctx, cancel, err := newClient(cmd)
+	// container and image inspect can share the same client, since no `platform`
+	// flag will be passed for image inspect.
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), namespace, address)
 	if err != nil {
 		return err
 	}
@@ -92,39 +104,53 @@ func inspectAction(cmd *cobra.Command, args []string) error {
 		},
 	}
 
+	inspectImage := len(inspectType) == 0 || inspectType == "image"
+	inspectContainer := len(inspectType) == 0 || inspectType == "container"
+
+	var imageInspectOptions types.ImageInspectOptions
+	var containerInspectOptions types.ContainerInspectOptions
+	if inspectImage {
+		platform := ""
+		imageInspectOptions, err = processImageInspectOptions(cmd, &platform)
+		if err != nil {
+			return err
+		}
+	}
+	if inspectContainer {
+		containerInspectOptions, err = processContainerInspectOptions(cmd)
+		if err != nil {
+			return err
+		}
+	}
+
 	var errs []error
 	for _, req := range args {
 		var ni int
 		var nc int
 
-		if len(inspectType) == 0 || inspectType == "image" {
+		if inspectImage {
 			ni, err = imagewalker.Walk(ctx, req)
 			if err != nil {
 				return err
 			}
 		}
-
-		if len(inspectType) == 0 || inspectType == "container" {
+		if inspectContainer {
 			nc, err = containerwalker.Walk(ctx, req)
 			if err != nil {
 				return err
 			}
 		}
 
-		if nc == 0 && ni == 0 {
-			return fmt.Errorf("no such object %s", req)
-		}
-		if nc != 0 {
-			if err := containerInspectAction(cmd, []string{req}); err != nil {
+		if ni == 0 && nc == 0 {
+			errs = append(errs, fmt.Errorf("no such object %s", req))
+		} else if ni > 0 {
+			if err := image.Inspect(ctx, client, []string{req}, imageInspectOptions); err != nil {
 				errs = append(errs, err)
 			}
-			continue
-		}
-		if ni != 0 {
-			if err := imageInspectActionWithPlatform(cmd, []string{req}, ""); err != nil {
+		} else if nc > 0 {
+			if err := container.Inspect(ctx, client, []string{req}, containerInspectOptions); err != nil {
 				errs = append(errs, err)
 			}
-			continue
 		}
 	}
 

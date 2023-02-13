@@ -17,10 +17,8 @@
 package main
 
 import (
-	"fmt"
-
-	"github.com/containerd/containerd/identifiers"
-	"github.com/containerd/nerdctl/pkg/strutil"
+	"github.com/containerd/nerdctl/pkg/api/types"
+	"github.com/containerd/nerdctl/pkg/cmd/volume"
 
 	"github.com/spf13/cobra"
 )
@@ -38,24 +36,26 @@ func newVolumeCreateCommand() *cobra.Command {
 	return volumeCreateCommand
 }
 
-func volumeCreateAction(cmd *cobra.Command, args []string) error {
-	name := args[0]
-	if err := identifiers.Validate(name); err != nil {
-		return fmt.Errorf("malformed name %s: %w", name, err)
-	}
-
-	volStore, err := getVolumeStore(cmd)
+func processVolumeCreateOptions(cmd *cobra.Command) (types.VolumeCreateOptions, error) {
+	globalOptions, err := processRootCmdFlags(cmd)
 	if err != nil {
-		return err
+		return types.VolumeCreateOptions{}, err
 	}
 	labels, err := cmd.Flags().GetStringArray("label")
 	if err != nil {
-		return err
+		return types.VolumeCreateOptions{}, err
 	}
-	labels = strutil.DedupeStrSlice(labels)
-	if _, err := volStore.Create(name, labels); err != nil {
-		return err
+	return types.VolumeCreateOptions{
+		GOptions: globalOptions,
+		Labels:   labels,
+		Stdout:   cmd.OutOrStdout(),
+	}, nil
+}
+
+func volumeCreateAction(cmd *cobra.Command, args []string) error {
+	options, err := processVolumeCreateOptions(cmd)
+	if err != nil {
+		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "%s\n", name)
-	return nil
+	return volume.Create(args[0], options)
 }

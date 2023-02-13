@@ -19,19 +19,17 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"testing"
 
 	"github.com/containerd/nerdctl/pkg/infoutil"
 	"github.com/containerd/nerdctl/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/pkg/testutil"
-	"github.com/ipfs/go-cid"
-	httpapi "github.com/ipfs/go-ipfs-http-client"
 
 	"gotest.tools/v3/assert"
 )
 
 func TestIPFS(t *testing.T) {
-	requiresIPFS(t)
 	testutil.DockerIncompatible(t)
 	base := testutil.NewBase(t)
 	ipfsCID := pushImageToIPFS(t, base, testutil.AlpineImage)
@@ -60,8 +58,36 @@ func TestIPFS(t *testing.T) {
 	base.Cmd("run", "--rm", decryptImageRef, "/bin/sh", "-c", "echo hello").AssertOK()
 }
 
+var iplineRegexp = regexp.MustCompile(`"([0-9\.]*)"`)
+
+func TestIPFSAddress(t *testing.T) {
+	testutil.DockerIncompatible(t)
+	base := testutil.NewBase(t)
+	ipfsaddr, done := runIPFSDaemonContainer(t, base)
+	defer done()
+	ipfsCID := pushImageToIPFS(t, base, testutil.AlpineImage, fmt.Sprintf("--ipfs-address=%s", ipfsaddr))
+	base.Env = append(os.Environ(), "CONTAINERD_SNAPSHOTTER=overlayfs")
+	base.Cmd("pull", "--ipfs-address", ipfsaddr, ipfsCID).AssertOK()
+	base.Cmd("run", "--ipfs-address", ipfsaddr, "--rm", ipfsCID, "echo", "hello").AssertOK()
+}
+
+func runIPFSDaemonContainer(t *testing.T, base *testutil.Base) (ipfsAddress string, done func()) {
+	name := "test-ipfs-address"
+	base.Cmd("run", "-d", "--name", name, "--entrypoint=/bin/sh", testutil.KuboImage, "-c", "ipfs init && ipfs config Addresses.API /ip4/0.0.0.0/tcp/5001 && ipfs daemon --offline").AssertOK()
+	iplines := base.Cmd("inspect", name, "-f", "'{{json .NetworkSettings.IPAddress}}'").OutLines()
+	t.Logf("IPAddress=%v", iplines)
+	assert.Equal(t, len(iplines), 2)
+	matches := iplineRegexp.FindStringSubmatch(iplines[0])
+	t.Logf("ip address matches=%v", matches)
+	assert.Equal(t, len(matches), 2)
+	ipfsaddr := fmt.Sprintf("/ip4/%s/tcp/5001", matches[1])
+	return ipfsaddr, func() {
+		base.Cmd("kill", "test-ipfs-address").AssertOK()
+		base.Cmd("rm", "test-ipfs-address").AssertOK()
+	}
+}
+
 func TestIPFSCommit(t *testing.T) {
-	requiresIPFS(t)
 	// cgroup is required for nerdctl commit
 	if rootlessutil.IsRootless() && infoutil.CgroupsVersion() == "1" {
 		t.Skip("test skipped for rootless containers on cgroup v1")
@@ -86,7 +112,6 @@ func TestIPFSCommit(t *testing.T) {
 }
 
 func TestIPFSWithLazyPulling(t *testing.T) {
-	requiresIPFS(t)
 	testutil.DockerIncompatible(t)
 	base := testutil.NewBase(t)
 	requiresStargz(base)
@@ -98,7 +123,6 @@ func TestIPFSWithLazyPulling(t *testing.T) {
 }
 
 func TestIPFSWithLazyPullingCommit(t *testing.T) {
-	requiresIPFS(t)
 	// cgroup is required for nerdctl commit
 	if rootlessutil.IsRootless() && infoutil.CgroupsVersion() == "1" {
 		t.Skip("test skipped for rootless containers on cgroup v1")
@@ -134,13 +158,5 @@ func pushImageToIPFS(t *testing.T, base *testutil.Base, name string, opts ...str
 
 func cidOf(t *testing.T, lines []string) string {
 	assert.Equal(t, len(lines) >= 2, true)
-	c, err := cid.Decode(lines[len(lines)-2])
-	assert.NilError(t, err)
-	return "ipfs://" + c.String()
-}
-
-func requiresIPFS(t *testing.T) {
-	if _, err := httpapi.NewLocalApi(); err != nil {
-		t.Skipf("test requires ipfs daemon, but got: %v", err)
-	}
+	return "ipfs://" + lines[len(lines)-2]
 }

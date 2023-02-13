@@ -17,14 +17,12 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
-	"github.com/containerd/containerd"
-	"github.com/containerd/nerdctl/pkg/netutil"
-	"github.com/containerd/nerdctl/pkg/strutil"
-	"github.com/sirupsen/logrus"
+	"github.com/containerd/nerdctl/pkg/api/types"
+	"github.com/containerd/nerdctl/pkg/clientutil"
+	"github.com/containerd/nerdctl/pkg/cmd/network"
 	"github.com/spf13/cobra"
 )
 
@@ -44,6 +42,10 @@ func newNetworkPruneCommand() *cobra.Command {
 }
 
 func networkPruneAction(cmd *cobra.Command, _ []string) error {
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return err
+	}
 	force, err := cmd.Flags().GetBool("force")
 	if err != nil {
 		return err
@@ -61,64 +63,17 @@ func networkPruneAction(cmd *cobra.Command, _ []string) error {
 			return nil
 		}
 	}
+	options := types.NetworkPruneOptions{
+		GOptions:             globalOptions,
+		NetworkDriversToKeep: networkDriversToKeep,
+		Stdout:               cmd.OutOrStdout(),
+	}
 
-	client, ctx, cancel, err := newClient(cmd)
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), options.GOptions.Namespace, options.GOptions.Address)
 	if err != nil {
 		return err
 	}
 	defer cancel()
 
-	return networkPrune(ctx, cmd, client)
-}
-
-func networkPrune(ctx context.Context, cmd *cobra.Command, client *containerd.Client) error {
-	cniPath, err := cmd.Flags().GetString("cni-path")
-	if err != nil {
-		return err
-	}
-	cniNetconfpath, err := cmd.Flags().GetString("cni-netconfpath")
-	if err != nil {
-		return err
-	}
-	e, err := netutil.NewCNIEnv(cniPath, cniNetconfpath)
-	if err != nil {
-		return err
-	}
-
-	usedNetworks, err := netutil.UsedNetworks(ctx, client)
-	if err != nil {
-		return err
-	}
-
-	networkConfigs, err := e.NetworkList()
-	if err != nil {
-		return err
-	}
-
-	var removedNetworks []string // nolint: prealloc
-	for _, net := range networkConfigs {
-		if strutil.InStringSlice(networkDriversToKeep, net.Name) {
-			continue
-		}
-		if net.NerdctlID == nil || net.File == "" {
-			continue
-		}
-		if _, ok := usedNetworks[net.Name]; ok {
-			continue
-		}
-		if err := e.RemoveNetwork(net); err != nil {
-			logrus.WithError(err).Errorf("failed to remove network %s", net.Name)
-			continue
-		}
-		removedNetworks = append(removedNetworks, net.Name)
-	}
-
-	if len(removedNetworks) > 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "Deleted Networks:")
-		for _, name := range removedNetworks {
-			fmt.Fprintln(cmd.OutOrStdout(), name)
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), "")
-	}
-	return nil
+	return network.Prune(ctx, client, options)
 }

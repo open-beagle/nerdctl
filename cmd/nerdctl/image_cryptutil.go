@@ -17,17 +17,9 @@
 package main
 
 import (
-	"context"
-	"errors"
-	"fmt"
-
-	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/images/converter"
-	"github.com/containerd/imgcrypt/images/encryption"
-	"github.com/containerd/imgcrypt/images/encryption/parsehelpers"
-	"github.com/containerd/nerdctl/pkg/platformutil"
-	"github.com/containerd/nerdctl/pkg/referenceutil"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/containerd/nerdctl/pkg/api/types"
+	"github.com/containerd/nerdctl/pkg/clientutil"
+	"github.com/containerd/nerdctl/pkg/cmd/image"
 	"github.com/spf13/cobra"
 )
 
@@ -60,137 +52,71 @@ func registerImgcryptFlags(cmd *cobra.Command, encrypt bool) {
 	}
 }
 
-// parseImgcryptFlags corresponds to https://github.com/containerd/imgcrypt/blob/v1.1.2/cmd/ctr/commands/images/crypt_utils.go#L244-L252
-func parseImgcryptFlags(cmd *cobra.Command, encrypt bool) (parsehelpers.EncArgs, error) {
-	var err error
-	flags := cmd.Flags()
-	var a parsehelpers.EncArgs
-
-	a.GPGHomedir, err = flags.GetString("gpg-homedir")
+func processImgCryptOptions(cmd *cobra.Command, args []string, encrypt bool) (types.ImageCryptOptions, error) {
+	globalOptions, err := processRootCmdFlags(cmd)
 	if err != nil {
-		return a, err
+		return types.ImageCryptOptions{}, err
 	}
-	a.GPGVersion, err = flags.GetString("gpg-version")
+	platforms, err := cmd.Flags().GetStringSlice("platform")
 	if err != nil {
-		return a, err
+		return types.ImageCryptOptions{}, err
 	}
-	a.Key, err = flags.GetStringSlice("key")
+	allPlatforms, err := cmd.Flags().GetBool("all-platforms")
 	if err != nil {
-		return a, err
+		return types.ImageCryptOptions{}, err
 	}
+	gpgHomeDir, err := cmd.Flags().GetString("gpg-homedir")
+	if err != nil {
+		return types.ImageCryptOptions{}, err
+	}
+	gpgVersion, err := cmd.Flags().GetString("gpg-version")
+	if err != nil {
+		return types.ImageCryptOptions{}, err
+	}
+	keys, err := cmd.Flags().GetStringSlice("key")
+	if err != nil {
+		return types.ImageCryptOptions{}, err
+	}
+	decRecipients, err := cmd.Flags().GetStringSlice("dec-recipient")
+	if err != nil {
+		return types.ImageCryptOptions{}, err
+	}
+	var recipients []string
 	if encrypt {
-		a.Recipient, err = flags.GetStringSlice("recipient")
+		recipients, err = cmd.Flags().GetStringSlice("recipient")
 		if err != nil {
-			return a, err
-		}
-		if len(a.Recipient) == 0 {
-			return a, errors.New("at least one recipient must be specified (e.g., --recipient=jwe:mypubkey.pem)")
+			return types.ImageCryptOptions{}, err
 		}
 	}
-	// While --recipient can be specified only for `nerdctl image encrypt`,
-	// --dec-recipient can be specified for both `nerdctl image encrypt` and `nerdctl image decrypt`.
-	a.DecRecipient, err = flags.GetStringSlice("dec-recipient")
-	if err != nil {
-		return a, err
-	}
-	return a, nil
+	return types.ImageCryptOptions{
+		GOptions:      globalOptions,
+		Platforms:     platforms,
+		AllPlatforms:  allPlatforms,
+		GpgHomeDir:    gpgHomeDir,
+		GpgVersion:    gpgVersion,
+		Keys:          keys,
+		DecRecipients: decRecipients,
+		Recipients:    recipients,
+		Stdout:        cmd.OutOrStdout(),
+	}, nil
 }
 
 func getImgcryptAction(encrypt bool) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		var convertOpts = []converter.Opt{}
+		options, err := processImgCryptOptions(cmd, args, encrypt)
+		if err != nil {
+			return err
+		}
 		srcRawRef := args[0]
 		targetRawRef := args[1]
-		if srcRawRef == "" || targetRawRef == "" {
-			return errors.New("src and target image need to be specified")
-		}
 
-		srcNamed, err := referenceutil.ParseAny(srcRawRef)
-		if err != nil {
-			return err
-		}
-		srcRef := srcNamed.String()
-
-		targetNamed, err := referenceutil.ParseDockerRef(targetRawRef)
-		if err != nil {
-			return err
-		}
-		targetRef := targetNamed.String()
-
-		allPlatforms, err := cmd.Flags().GetBool("all-platforms")
-		if err != nil {
-			return err
-		}
-		platform, err := cmd.Flags().GetStringSlice("platform")
-		if err != nil {
-			return err
-		}
-		platMC, err := platformutil.NewMatchComparer(allPlatforms, platform)
-		if err != nil {
-			return err
-		}
-		convertOpts = append(convertOpts, converter.WithPlatform(platMC))
-
-		imgcryptFlags, err := parseImgcryptFlags(cmd, encrypt)
-		if err != nil {
-			return err
-		}
-
-		client, ctx, cancel, err := newClient(cmd)
+		client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), options.GOptions.Namespace, options.GOptions.Address)
 		if err != nil {
 			return err
 		}
 		defer cancel()
 
-		srcImg, err := client.ImageService().Get(ctx, srcRef)
-		if err != nil {
-			return err
-		}
-		layerDescs, err := platformutil.LayerDescs(ctx, client.ContentStore(), srcImg.Target, platMC)
-		if err != nil {
-			return err
-		}
-		layerFilter := func(desc ocispec.Descriptor) bool {
-			return true
-		}
-		var convertFunc converter.ConvertFunc
-		if encrypt {
-			cc, err := parsehelpers.CreateCryptoConfig(imgcryptFlags, layerDescs)
-			if err != nil {
-				return err
-			}
-			convertFunc = encryption.GetImageEncryptConverter(&cc, layerFilter)
-		} else {
-			cc, err := parsehelpers.CreateDecryptCryptoConfig(imgcryptFlags, layerDescs)
-			if err != nil {
-				return err
-			}
-			convertFunc = encryption.GetImageDecryptConverter(&cc, layerFilter)
-		}
-		// we have to compose the DefaultIndexConvertFunc here to match platforms.
-		convertFunc = composeConvertFunc(converter.DefaultIndexConvertFunc(nil, false, platMC), convertFunc)
-		convertOpts = append(convertOpts, converter.WithIndexConvertFunc(convertFunc))
-
-		// converter.Convert() gains the lease by itself
-		newImg, err := converter.Convert(ctx, client, targetRef, srcRef, convertOpts...)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), newImg.Target.Digest.String())
-		return nil
-	}
-}
-
-func composeConvertFunc(a, b converter.ConvertFunc) converter.ConvertFunc {
-	return func(ctx context.Context, cs content.Store, desc ocispec.Descriptor) (*ocispec.Descriptor, error) {
-		newDesc, err := a(ctx, cs, desc)
-		if err != nil {
-			return newDesc, err
-		}
-		if newDesc == nil {
-			return b(ctx, cs, desc)
-		}
-		return b(ctx, cs, *newDesc)
+		return image.Crypt(ctx, client, srcRawRef, targetRawRef, encrypt, options)
 	}
 }
 

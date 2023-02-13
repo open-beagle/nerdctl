@@ -21,6 +21,9 @@ import (
 	"sync"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/nerdctl/pkg/clientutil"
+	"github.com/containerd/nerdctl/pkg/cmd/compose"
+	"github.com/containerd/nerdctl/pkg/containerutil"
 	"github.com/containerd/nerdctl/pkg/labels"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -39,16 +42,25 @@ func newComposePauseCommand() *cobra.Command {
 }
 
 func composePauseAction(cmd *cobra.Command, args []string) error {
-	client, ctx, cancel, err := newClient(cmd)
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return err
+	}
+
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), globalOptions.Namespace, globalOptions.Address)
 	if err != nil {
 		return err
 	}
 	defer cancel()
-
-	c, err := getComposer(cmd, client)
+	options, err := getComposeOptions(cmd, globalOptions.DebugFull, globalOptions.Experimental)
 	if err != nil {
 		return err
 	}
+	c, err := compose.New(client, globalOptions, options, cmd.OutOrStdout(), cmd.ErrOrStderr())
+	if err != nil {
+		return err
+	}
+
 	serviceNames, err := c.ServiceNames(args...)
 	if err != nil {
 		return err
@@ -65,7 +77,7 @@ func composePauseAction(cmd *cobra.Command, args []string) error {
 	for _, c := range containers {
 		c := c
 		eg.Go(func() error {
-			if err := pauseContainer(ctx, client, c.ID()); err != nil {
+			if err := containerutil.Pause(ctx, client, c.ID()); err != nil {
 				return err
 			}
 			info, err := c.Info(ctx, containerd.WithoutRefreshedMetadata)
@@ -97,13 +109,21 @@ func newComposeUnpauseCommand() *cobra.Command {
 }
 
 func composeUnpauseAction(cmd *cobra.Command, args []string) error {
-	client, ctx, cancel, err := newClient(cmd)
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return err
+	}
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), globalOptions.Namespace, globalOptions.Address)
 	if err != nil {
 		return err
 	}
 	defer cancel()
 
-	c, err := getComposer(cmd, client)
+	options, err := getComposeOptions(cmd, globalOptions.DebugFull, globalOptions.Experimental)
+	if err != nil {
+		return err
+	}
+	c, err := compose.New(client, globalOptions, options, cmd.OutOrStdout(), cmd.ErrOrStderr())
 	if err != nil {
 		return err
 	}

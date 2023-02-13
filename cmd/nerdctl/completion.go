@@ -21,13 +21,18 @@ import (
 	"time"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/nerdctl/pkg/clientutil"
 	"github.com/containerd/nerdctl/pkg/labels"
 	"github.com/containerd/nerdctl/pkg/netutil"
 	"github.com/spf13/cobra"
 )
 
 func shellCompleteImageNames(cmd *cobra.Command) ([]string, cobra.ShellCompDirective) {
-	client, ctx, cancel, err := newClient(cmd)
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveError
+	}
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), globalOptions.Namespace, globalOptions.Address)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveError
 	}
@@ -46,7 +51,11 @@ func shellCompleteImageNames(cmd *cobra.Command) ([]string, cobra.ShellCompDirec
 }
 
 func shellCompleteContainerNames(cmd *cobra.Command, filterFunc func(containerd.ProcessStatus) bool) ([]string, cobra.ShellCompDirective) {
-	client, ctx, cancel, err := newClient(cmd)
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveError
+	}
+	client, ctx, cancel, err := clientutil.NewClient(cmd.Context(), globalOptions.Namespace, globalOptions.Address)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveError
 	}
@@ -91,20 +100,16 @@ func shellCompleteContainerNames(cmd *cobra.Command, filterFunc func(containerd.
 
 // shellCompleteNetworkNames includes {"bridge","host","none"}
 func shellCompleteNetworkNames(cmd *cobra.Command, exclude []string) ([]string, cobra.ShellCompDirective) {
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveError
+	}
 	excludeMap := make(map[string]struct{}, len(exclude))
 	for _, ex := range exclude {
 		excludeMap[ex] = struct{}{}
 	}
 
-	cniPath, err := cmd.Flags().GetString("cni-path")
-	if err != nil {
-		return nil, cobra.ShellCompDirectiveError
-	}
-	cniNetconfpath, err := cmd.Flags().GetString("cni-netconfpath")
-	if err != nil {
-		return nil, cobra.ShellCompDirectiveError
-	}
-	e, err := netutil.NewCNIEnv(cniPath, cniNetconfpath)
+	e, err := netutil.NewCNIEnv(globalOptions.CNIPath, globalOptions.CNINetConfPath)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveError
 	}
@@ -127,7 +132,11 @@ func shellCompleteNetworkNames(cmd *cobra.Command, exclude []string) ([]string, 
 }
 
 func shellCompleteVolumeNames(cmd *cobra.Command) ([]string, cobra.ShellCompDirective) {
-	vols, err := getVolumes(cmd)
+	globalOptions, err := processRootCmdFlags(cmd)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveError
+	}
+	vols, err := getVolumes(cmd, globalOptions)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveError
 	}
