@@ -7,7 +7,7 @@ git remote add upstream git@github.com:containerd/nerdctl.git
 
 git fetch upstream
 
-git merge v1.2.0
+git merge v1.3.1
 ```
 
 ## debug
@@ -18,19 +18,22 @@ docker run -it \
 --rm \
 -v $PWD/:/go/src/github.com/containerd/nerdctl \
 -w /go/src/github.com/containerd/nerdctl \
-registry.cn-qingdao.aliyuncs.com/wod/golang:1.19 \
+registry.cn-qingdao.aliyuncs.com/wod/golang:1.19-loongnix \
 rm -rf vendor && go mod vendor
+
+# patch vendor
+git apply .beagle/0001-support-loong64.patch
 
 # build
 docker run -it \
 --rm \
 -v $PWD/:/go/src/github.com/containerd/nerdctl \
 -w /go/src/github.com/containerd/nerdctl \
-registry.cn-qingdao.aliyuncs.com/wod/golang:1.19 \
+registry.cn-qingdao.aliyuncs.com/wod/golang:1.19-loongnix \
 bash .beagle/build.sh
 
 # check
-file _output/linux/arm64/nerdctl
+file _output/linux/loong64/nerdctl
 ```
 
 ## cache

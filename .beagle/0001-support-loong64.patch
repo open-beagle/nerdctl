@@ -1,0 +1,24 @@
+From 48f1508959285454a622aebe3300c848bf7f4af8 Mon Sep 17 00:00:00 2001
+From: shucheng <shucheng@bd-apaas.com>
+Date: Thu, 20 Apr 2023 16:33:48 +0800
+Subject: [PATCH] support loong64
+
+---
+ vendor/github.com/cilium/ebpf/internal/endian_be.go | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/vendor/github.com/cilium/ebpf/internal/endian_be.go b/vendor/github.com/cilium/ebpf/internal/endian_be.go
+index ad33cda..3cb8073 100644
+--- a/vendor/github.com/cilium/ebpf/internal/endian_be.go
++++ b/vendor/github.com/cilium/ebpf/internal/endian_be.go
+@@ -1,5 +1,5 @@
+-//go:build armbe || arm64be || mips || mips64 || mips64p32 || ppc64 || s390 || s390x || sparc || sparc64
+-// +build armbe arm64be mips mips64 mips64p32 ppc64 s390 s390x sparc sparc64
++//go:build armbe || arm64be || loong64 || mips || mips64 || mips64p32 || ppc64 || s390 || s390x || sparc || sparc64
++// +build armbe arm64be loong64 mips mips64 mips64p32 ppc64 s390 s390x sparc sparc64
+ 
+ package internal
+ 
+-- 
+2.39.2
+
