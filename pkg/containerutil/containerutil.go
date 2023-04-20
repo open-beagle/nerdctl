@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -28,16 +29,18 @@ import (
 	"github.com/containerd/console"
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
-	"github.com/containerd/containerd/cmd/ctr/commands"
-	"github.com/containerd/containerd/cmd/ctr/commands/tasks"
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/oci"
 	"github.com/containerd/containerd/runtime/restart"
+	"github.com/containerd/nerdctl/pkg/api/types"
+	"github.com/containerd/nerdctl/pkg/consoleutil"
 	"github.com/containerd/nerdctl/pkg/errutil"
 	"github.com/containerd/nerdctl/pkg/formatter"
 	"github.com/containerd/nerdctl/pkg/labels"
+	"github.com/containerd/nerdctl/pkg/nsutil"
 	"github.com/containerd/nerdctl/pkg/portutil"
 	"github.com/containerd/nerdctl/pkg/rootlessutil"
+	"github.com/containerd/nerdctl/pkg/signalutil"
 	"github.com/containerd/nerdctl/pkg/taskutil"
 	"github.com/moby/sys/signal"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -107,6 +110,15 @@ func ContainerNetNSPath(ctx context.Context, c containerd.Container) (string, er
 func UpdateExplicitlyStoppedLabel(ctx context.Context, container containerd.Container, explicitlyStopped bool) error {
 	opt := containerd.WithAdditionalContainerLabels(map[string]string{
 		restart.ExplicitlyStoppedLabel: strconv.FormatBool(explicitlyStopped),
+	})
+	return container.Update(ctx, containerd.UpdateContainerOpts(opt))
+}
+
+// UpdateErrorLabel updates the "nerdctl/error"
+// label of the container according to the container error.
+func UpdateErrorLabel(ctx context.Context, container containerd.Container, err error) error {
+	opt := containerd.WithAdditionalContainerLabels(map[string]string{
+		labels.Error: err.Error(),
 	})
 	return container.Update(ctx, containerd.UpdateContainerOpts(opt))
 }
@@ -186,7 +198,13 @@ func GenerateSharingPIDOpts(ctx context.Context, targetCon containerd.Container)
 }
 
 // Start starts `container` with `attach` flag. If `attach` is true, it will attach to the container's stdio.
-func Start(ctx context.Context, container containerd.Container, flagA bool, client *containerd.Client) error {
+func Start(ctx context.Context, container containerd.Container, flagA bool, client *containerd.Client) (err error) {
+	// defer the storage of start error in the dedicated label
+	defer func() {
+		if err != nil {
+			UpdateErrorLabel(ctx, container, err)
+		}
+	}()
 	lab, err := container.Labels(ctx)
 	if err != nil {
 		return err
@@ -250,13 +268,13 @@ func Start(ctx context.Context, container containerd.Container, flagA bool, clie
 		return nil
 	}
 	if flagA && flagT {
-		if err := tasks.HandleConsoleResize(ctx, task, con); err != nil {
+		if err := consoleutil.HandleConsoleResize(ctx, task, con); err != nil {
 			logrus.WithError(err).Error("console resize")
 		}
 	}
 
-	sigc := commands.ForwardAllSignals(ctx, task)
-	defer commands.StopCatch(sigc)
+	sigc := signalutil.ForwardAllSignals(ctx, task)
+	defer signalutil.StopCatch(sigc)
 	status := <-statusC
 	code, _, err := status.Result()
 	if err != nil {
@@ -269,7 +287,13 @@ func Start(ctx context.Context, container containerd.Container, flagA bool, clie
 }
 
 // Stop stops `container` by sending SIGTERM. If the container is not stopped after `timeout`, it sends a SIGKILL.
-func Stop(ctx context.Context, container containerd.Container, timeout *time.Duration) error {
+func Stop(ctx context.Context, container containerd.Container, timeout *time.Duration) (err error) {
+	// defer the storage of stop error in the dedicated label
+	defer func() {
+		if err != nil {
+			UpdateErrorLabel(ctx, container, err)
+		}
+	}()
 	if err := UpdateExplicitlyStoppedLabel(ctx, container, true); err != nil {
 		return err
 	}
@@ -375,6 +399,18 @@ func Stop(ctx context.Context, container containerd.Container, timeout *time.Dur
 	return waitContainerStop(ctx, exitCh, container.ID())
 }
 
+func waitContainerStop(ctx context.Context, exitCh <-chan containerd.ExitStatus, id string) error {
+	select {
+	case <-ctx.Done():
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("wait container %v: %w", id, err)
+		}
+		return nil
+	case status := <-exitCh:
+		return status.Error()
+	}
+}
+
 // Pause pauses a container by its id.
 func Pause(ctx context.Context, client *containerd.Client, id string) error {
 	container, err := client.LoadContainer(ctx, id)
@@ -402,14 +438,35 @@ func Pause(ctx context.Context, client *containerd.Client, id string) error {
 	}
 }
 
-func waitContainerStop(ctx context.Context, exitCh <-chan containerd.ExitStatus, id string) error {
-	select {
-	case <-ctx.Done():
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("wait container %v: %w", id, err)
-		}
-		return nil
-	case status := <-exitCh:
-		return status.Error()
+// Unpause unpauses a container by its id.
+func Unpause(ctx context.Context, client *containerd.Client, id string) error {
+	container, err := client.LoadContainer(ctx, id)
+	if err != nil {
+		return err
 	}
+
+	task, err := container.Task(ctx, cio.Load)
+	if err != nil {
+		return err
+	}
+
+	status, err := task.Status(ctx)
+	if err != nil {
+		return err
+	}
+
+	switch status.Status {
+	case containerd.Paused:
+		return task.Resume(ctx)
+	default:
+		return fmt.Errorf("container %s is not paused", id)
+	}
+}
+
+// Returns the path to the Nerdctl-managed state directory for the container with the given ID.
+func ContainerStateDirPath(globalOptions types.GlobalCommandOptions, dataStore, id string) (string, error) {
+	if err := nsutil.ValidateNamespaceName(globalOptions.Namespace); err != nil {
+		return "", fmt.Errorf("invalid namespace name %q for determining state dir of container %q: %s", globalOptions.Namespace, id, err)
+	}
+	return filepath.Join(dataStore, "containers", globalOptions.Namespace, id), nil
 }

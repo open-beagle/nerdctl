@@ -21,6 +21,29 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func processImageSignOptions(cmd *cobra.Command) (opt types.ImageSignOptions, err error) {
+	if opt.Provider, err = cmd.Flags().GetString("sign"); err != nil {
+		return
+	}
+	if opt.CosignKey, err = cmd.Flags().GetString("cosign-key"); err != nil {
+		return
+	}
+	if opt.NotationKeyName, err = cmd.Flags().GetString("notation-key-name"); err != nil {
+		return
+	}
+	return
+}
+
+func processImageVerifyOptions(cmd *cobra.Command) (opt types.ImageVerifyOptions, err error) {
+	if opt.Provider, err = cmd.Flags().GetString("verify"); err != nil {
+		return
+	}
+	if opt.CosignKey, err = cmd.Flags().GetString("cosign-key"); err != nil {
+		return
+	}
+	return
+}
+
 func processRootCmdFlags(cmd *cobra.Command) (types.GlobalCommandOptions, error) {
 	debug, err := cmd.Flags().GetBool("debug")
 	if err != nil {
@@ -70,6 +93,10 @@ func processRootCmdFlags(cmd *cobra.Command) (types.GlobalCommandOptions, error)
 	if err != nil {
 		return types.GlobalCommandOptions{}, err
 	}
+	hostGatewayIP, err := cmd.Flags().GetString("host-gateway-ip")
+	if err != nil {
+		return types.GlobalCommandOptions{}, err
+	}
 	return types.GlobalCommandOptions{
 		Debug:            debug,
 		DebugFull:        debugFull,
@@ -83,5 +110,6 @@ func processRootCmdFlags(cmd *cobra.Command) (types.GlobalCommandOptions, error)
 		InsecureRegistry: insecureRegistry,
 		HostsDir:         hostsDir,
 		Experimental:     experimental,
+		HostGatewayIP:    hostGatewayIP,
 	}, nil
 }

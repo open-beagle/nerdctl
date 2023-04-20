@@ -49,12 +49,15 @@ func newPushCommand() *cobra.Command {
 	pushCommand.Flags().String("ipfs-address", "", "multiaddr of IPFS API (default uses $IPFS_PATH env variable if defined or local directory ~/.ipfs)")
 
 	// #region sign flags
-	pushCommand.Flags().String("sign", "none", "Sign the image (none|cosign")
+	pushCommand.Flags().String("sign", "none", "Sign the image (none|cosign|notation")
 	pushCommand.RegisterFlagCompletionFunc("sign", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		return []string{"none", "cosign"}, cobra.ShellCompDirectiveNoFileComp
+		return []string{"none", "cosign", "notation"}, cobra.ShellCompDirectiveNoFileComp
 	})
 	pushCommand.Flags().String("cosign-key", "", "Path to the private key file, KMS URI or Kubernetes Secret for --sign=cosign")
+	pushCommand.Flags().String("notation-key-name", "", "Signing key name for a key previously added to notation's key list for --sign=notation")
 	// #endregion
+
+	pushCommand.Flags().BoolP("quiet", "q", false, "Suppress verbose output")
 
 	pushCommand.Flags().Bool(allowNonDistFlag, false, "Allow pushing images with non-distributable blobs")
 
@@ -86,11 +89,7 @@ func processImagePushOptions(cmd *cobra.Command) (types.ImagePushOptions, error)
 	if err != nil {
 		return types.ImagePushOptions{}, err
 	}
-	sign, err := cmd.Flags().GetString("sign")
-	if err != nil {
-		return types.ImagePushOptions{}, err
-	}
-	cosignKey, err := cmd.Flags().GetString("cosign-key")
+	quiet, err := cmd.Flags().GetBool("quiet")
 	if err != nil {
 		return types.ImagePushOptions{}, err
 	}
@@ -98,15 +97,19 @@ func processImagePushOptions(cmd *cobra.Command) (types.ImagePushOptions, error)
 	if err != nil {
 		return types.ImagePushOptions{}, err
 	}
+	signOptions, err := processImageSignOptions(cmd)
+	if err != nil {
+		return types.ImagePushOptions{}, err
+	}
 	return types.ImagePushOptions{
 		GOptions:                       globalOptions,
+		SignOptions:                    signOptions,
 		Platforms:                      platform,
 		AllPlatforms:                   allPlatforms,
 		Estargz:                        estargz,
 		IpfsEnsureImage:                ipfsEnsureImage,
 		IpfsAddress:                    ipfsAddress,
-		Sign:                           sign,
-		CosignKey:                      cosignKey,
+		Quiet:                          quiet,
 		AllowNondistributableArtifacts: allowNonDist,
 		Stdout:                         cmd.OutOrStdout(),
 	}, nil

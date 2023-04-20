@@ -27,11 +27,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/containerd/containerd/cmd/ctr/commands"
 	gocni "github.com/containerd/go-cni"
 	"github.com/containerd/nerdctl/pkg/bypass4netnsutil"
 	"github.com/containerd/nerdctl/pkg/dnsutil/hostsstore"
 	"github.com/containerd/nerdctl/pkg/labels"
+	"github.com/containerd/nerdctl/pkg/namestore"
 	"github.com/containerd/nerdctl/pkg/netutil"
 	"github.com/containerd/nerdctl/pkg/netutil/nettype"
 	"github.com/containerd/nerdctl/pkg/rootlessutil"
@@ -50,6 +50,9 @@ const (
 	// spec.State.Pid.
 	// This is mostly used for VM based runtime, where the spec.State PID does not
 	// necessarily lives in the created container networking namespace.
+	//
+	// On Windows, this label will contain the UUID of a namespace managed by
+	// the Host Compute Network Service (HCN) API.
 	NetworkNamespace = labels.Prefix + "network-namespace"
 )
 
@@ -161,12 +164,15 @@ func newHandlerOpts(state *specs.State, dataStore, cniPath, cniNetconfPath strin
 		if err != nil {
 			return nil, err
 		}
+		if o.cni == nil {
+			logrus.Warnf("no CNI network could be loaded from the provided network names: %v", networks)
+		}
 	default:
 		return nil, fmt.Errorf("unexpected network type %v", netType)
 	}
 
 	if pidFile := o.state.Annotations[labels.PIDFile]; pidFile != "" {
-		if err := commands.WritePidFile(pidFile, state.Pid); err != nil {
+		if err := writePidFile(pidFile, state.Pid); err != nil {
 			return nil, err
 		}
 	}
@@ -428,14 +434,8 @@ func onCreateRuntime(opts *handlerOpts) error {
 					return fmt.Errorf("bypass4netnsd not running? (Hint: run `containerd-rootless-setuptool.sh install-bypass4netnsd`): %w", err)
 				}
 			} else if len(opts.ports) > 0 {
-				pm, err := rootlessutil.NewRootlessCNIPortManager(opts.rootlessKitClient)
-				if err != nil {
-					return err
-				}
-				for _, p := range opts.ports {
-					if err := pm.ExposePort(ctx, p); err != nil {
-						return err
-					}
+				if err := exposePortsRootless(ctx, opts.rootlessKitClient, opts.ports); err != nil {
+					return fmt.Errorf("failed to expose ports in rootless mode: %s", err)
 				}
 			}
 		}
@@ -445,6 +445,7 @@ func onCreateRuntime(opts *handlerOpts) error {
 
 func onPostStop(opts *handlerOpts) error {
 	ctx := context.Background()
+	ns := opts.state.Annotations[labels.Namespace]
 	if opts.cni != nil {
 		var err error
 		b4nnEnabled, err := bypass4netnsutil.IsBypass4netnsEnabled(opts.state.Annotations)
@@ -462,14 +463,8 @@ func onPostStop(opts *handlerOpts) error {
 					return err
 				}
 			} else if len(opts.ports) > 0 {
-				pm, err := rootlessutil.NewRootlessCNIPortManager(opts.rootlessKitClient)
-				if err != nil {
-					return err
-				}
-				for _, p := range opts.ports {
-					if err := pm.UnexposePort(ctx, p); err != nil {
-						return err
-					}
+				if err := unexposePortsRootless(ctx, opts.rootlessKitClient, opts.ports); err != nil {
+					return fmt.Errorf("failed to unexpose ports in rootless mode: %s", err)
 				}
 			}
 		}
@@ -497,10 +492,37 @@ func onPostStop(opts *handlerOpts) error {
 		if err != nil {
 			return err
 		}
-		ns := opts.state.Annotations[labels.Namespace]
 		if err := hs.Release(ns, opts.state.ID); err != nil {
 			return err
 		}
 	}
+	namst, err := namestore.New(opts.dataStore, ns)
+	if err != nil {
+		return err
+	}
+	name := opts.state.Annotations[labels.Name]
+	if err := namst.Release(name, opts.state.ID); err != nil {
+		return fmt.Errorf("failed to release container name %s: %w", name, err)
+	}
 	return nil
+}
+
+// writePidFile writes the pid atomically to a file.
+// From https://github.com/containerd/containerd/blob/v1.7.0-rc.2/cmd/ctr/commands/commands.go#L265-L282
+func writePidFile(path string, pid int) error {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	tempPath := filepath.Join(filepath.Dir(path), fmt.Sprintf(".%s", filepath.Base(path)))
+	f, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_EXCL|os.O_SYNC, 0666)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(f, "%d", pid)
+	f.Close()
+	if err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
 }

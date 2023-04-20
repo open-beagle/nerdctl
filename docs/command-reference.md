@@ -177,7 +177,8 @@ Network flags:
 - :whale: `--dns-search`: Set custom DNS search domains
 - :whale: `--dns-opt, --dns-option`: Set DNS options
 - :whale: `-h, --hostname`: Container host name
-- :whale: `--add-host`: Add a custom host-to-IP mapping (host:ip)
+- :whale: `--add-host`: Add a custom host-to-IP mapping (host:ip). `ip` could be a special string `host-gateway`,
+- which will be resolved to the `host-gateway-ip` in nerdctl.toml or global flag.
 - :whale: `--ip`: Specific static IP address(es) to use
 - :whale: `--mac-address`: Specific MAC address to use. Be aware that it does not
   check if manually specified MAC addresses are unique. Supports network
@@ -204,7 +205,7 @@ Resource flags:
 - :whale: `--cgroupns=(host|private)`: Cgroup namespace to use
   - Default: "private" on cgroup v2 hosts, "host" on cgroup v1 hosts
 - :whale: `--cgroup-parent`: Optional parent cgroup for the container
-- :whale: `--device`: Add a host device to the container
+- :whale: :blue_square: `--device`: Add a host device to the container
 
 Intel RDT flags:
 
@@ -357,7 +358,7 @@ Ulimit flags:
 
 Verify flags:
 
-- :nerd_face: `--verify`: Verify the image (none|cosign). See [`docs/cosign.md`](./cosign.md) for details.
+- :nerd_face: `--verify`: Verify the image (none|cosign|notation). See [`./cosign.md`](./cosign.md) and [`./notation.md`](./notation.md) for details.
 - :nerd_face: `--cosign-key`: Path to the public key file, KMS, URI or Kubernetes Secret for `--verify=cosign`
 
 IPFS flags:
@@ -707,7 +708,7 @@ Flags:
 - :nerd_face: `--all-platforms`: Pull content for all platforms
 - :nerd_face: `--unpack`: Unpack the image for the current single platform (auto/true/false)
 - :whale: `-q, --quiet`: Suppress verbose output
-- :nerd_face: `--verify`: Verify the image (none|cosign). See [`docs/cosign.md`](./cosign.md) for details.
+- :nerd_face: `--verify`: Verify the image (none|cosign|notation). See [`./cosign.md`](./cosign.md) and [`./notation.md`](./notation.md) for details.
 - :nerd_face: `--cosign-key`: Path to the public key file, KMS, URI or Kubernetes Secret for `--verify=cosign`
 - :nerd_face: `--ipfs-address`: Multiaddr of IPFS API (default uses `$IPFS_PATH` env variable if defined or local directory `~/.ipfs`)
 
@@ -725,8 +726,9 @@ Flags:
 
 - :nerd_face: `--platform=(amd64|arm64|...)`: Push content for a specific platform
 - :nerd_face: `--all-platforms`: Push content for all platforms
-- :nerd_face: `--sign`: Sign the image (none|cosign). See [`docs/cosign.md`](./cosign.md) for details.
+- :nerd_face: `--sign`: Sign the image (none|cosign|notation). See [`./cosign.md`](./cosign.md) and [`./notation.md`](./notation.md) for details.
 - :nerd_face: `--cosign-key`: Path to the private key file, KMS, URI or Kubernetes Secret for `--sign=cosign`
+- :nerd_face: `--notation-key-name`: Signing key name for a key previously added to notation's key list for `--sign=notation`
 - :nerd_face: `--allow-nondistributable-artifacts`: Allow pushing images with non-distributable blobs
 - :nerd_face: `--ipfs-address`: Multiaddr of IPFS API (default uses `$IPFS_PATH` env variable if defined or local directory `~/.ipfs`)
 
@@ -808,8 +810,6 @@ Flags:
 ### :whale: nerdctl image prune
 
 Remove unused images.
-
-:warning: Currently, `nerdctl image prune` requires --all to be specified.
 
 Usage: `nerdctl image prune [OPTIONS]`
 
@@ -1230,8 +1230,6 @@ Flags:
 
 Remove unused data
 
-:warning: Currently, `nerdctl system prune` requires --all to be specified.
-
 Usage: `nerdctl system prune [OPTIONS]`
 
 Flags:
@@ -1308,6 +1306,7 @@ Flags:
 - :whale: `-f, --file`: Specify an alternate compose file
 - :whale: `-p, --project-name`: Specify an alternate project name
 - :nerd_face: `--ipfs-address`: Multiaddr of IPFS API (default uses `$IPFS_PATH` env variable if defined or local directory `~/.ipfs`)
+- :whale: `--profile: Specify a profile to enable
 
 ### :whale: nerdctl compose up
 
@@ -1599,6 +1598,8 @@ Flags:
 - :nerd_face: `--cgroup-manager=(cgroupfs|systemd|none)`: cgroup manager
   - Default: "systemd" on cgroup v2 (rootful & rootless), "cgroupfs" on v1 rootful, "none" on v1 rootless
 - :nerd_face: `--insecure-registry`: skips verifying HTTPS certs, and allows falling back to plain HTTP
+- :nerd_face: `--host-gateway-ip`: IP address that the special 'host-gateway' string in --add-host resolves to. It has no effect without setting --add-host
+  - Default: the IP address of the host
 
 The global flags can be also specified in `/etc/nerdctl/nerdctl.toml` (rootful) and `~/.config/nerdctl/nerdctl.toml` (rootless).
 See [`./config.md`](./config.md).
@@ -1614,7 +1615,7 @@ Container management:
 Image:
 
 - `docker export` and `docker import`
-- `docker trust *` (Instead, nerdctl supports `nerdctl pull --verify=cosign` and `nerdctl push --sign=cosign`. See [`./cosign.md`](./cosign.md).)
+- `docker trust *` (Instead, nerdctl supports `nerdctl pull --verify=cosign|notation` and `nerdctl push --sign=cosign|notation`. See [`./cosign.md`](./cosign.md) and [`./notation.md`](./notation.md).)
 - `docker manifest *`
 
 Network management:

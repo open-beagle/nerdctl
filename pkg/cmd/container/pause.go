@@ -26,6 +26,7 @@ import (
 	"github.com/containerd/nerdctl/pkg/idutil/containerwalker"
 )
 
+// Pause pauses all containers specified by `reqs`.
 func Pause(ctx context.Context, client *containerd.Client, reqs []string, options types.ContainerPauseOptions) error {
 	walker := &containerwalker.ContainerWalker{
 		Client: client,
@@ -41,13 +42,6 @@ func Pause(ctx context.Context, client *containerd.Client, reqs []string, option
 			return err
 		},
 	}
-	for _, req := range reqs {
-		n, err := walker.Walk(ctx, req)
-		if err != nil {
-			return err
-		} else if n == 0 {
-			return fmt.Errorf("no such container %s", req)
-		}
-	}
-	return nil
+
+	return walker.WalkAll(ctx, reqs, true)
 }

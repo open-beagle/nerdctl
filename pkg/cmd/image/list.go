@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
 	"text/tabwriter"
 	"text/template"
@@ -30,130 +29,81 @@ import (
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/pkg/progress"
 	"github.com/containerd/containerd/platforms"
-	dockerreference "github.com/containerd/containerd/reference/docker"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/nerdctl/pkg/api/types"
 	"github.com/containerd/nerdctl/pkg/formatter"
 	"github.com/containerd/nerdctl/pkg/imgutil"
-	"github.com/opencontainers/image-spec/identity"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/sirupsen/logrus"
 )
 
-func List(ctx context.Context, client *containerd.Client, options types.ImageListOptions) error {
-	var imageStore = client.ImageService()
-	imageList, err := imageStore.List(ctx, options.NameAndRefFilter...)
+// ListCommandHandler `List` and print images matching filters in `options`.
+func ListCommandHandler(ctx context.Context, client *containerd.Client, options types.ImageListOptions) error {
+	imageList, err := List(ctx, client, options.Filters, options.NameAndRefFilter)
 	if err != nil {
 		return err
 	}
-	if len(options.Filters) > 0 {
-		f, err := imgutil.ParseFilters(options.Filters)
+	return printImages(ctx, client, imageList, options)
+}
+
+// List queries containerd client to get image list and only returns those matching given filters.
+//
+// Supported filters:
+// - before=<image>[:<tag>]: Images created before given image (exclusive)
+// - since=<image>[:<tag>]: Images created after given image (exclusive)
+// - label=<key>[=<value>]: Matches images based on the presence of a label alone or a label and a value
+// - dangling=true: Filter images by dangling
+// - reference=<image>[:<tag>]: Filter images by reference (Matches both docker compatible wildcard pattern and regexp
+//
+// nameAndRefFilter has the format of `name==(<image>[:<tag>])|ID`,
+// and they will be used when getting images from containerd,
+// while the remaining filters are only applied after getting images from containerd,
+// which means that having nameAndRefFilter may speed up the process if there are a lot of images in containerd.
+func List(ctx context.Context, client *containerd.Client, filters, nameAndRefFilter []string) ([]images.Image, error) {
+	var imageStore = client.ImageService()
+	imageList, err := imageStore.List(ctx, nameAndRefFilter...)
+	if err != nil {
+		return nil, err
+	}
+	if len(filters) > 0 {
+		f, err := imgutil.ParseFilters(filters)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if f.Dangling != nil {
-			imageList = filterDangling(imageList, *f.Dangling)
+			imageList = imgutil.FilterDangling(imageList, *f.Dangling)
 		}
 
-		imageList, err = filterByLabel(ctx, client, imageList, f.Labels)
+		imageList, err = imgutil.FilterByLabel(ctx, client, imageList, f.Labels)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		imageList, err = filterByReference(imageList, f.Reference)
+		imageList, err = imgutil.FilterByReference(imageList, f.Reference)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		var beforeImages []images.Image
 		if len(f.Before) > 0 {
 			beforeImages, err = imageStore.List(ctx, f.Before...)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 		var sinceImages []images.Image
 		if len(f.Since) > 0 {
 			sinceImages, err = imageStore.List(ctx, f.Since...)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 
 		imageList = imgutil.FilterImages(imageList, beforeImages, sinceImages)
-	}
-	return printImages(ctx, client, imageList, options)
-}
-
-func filterByReference(imageList []images.Image, filters []string) ([]images.Image, error) {
-	var filteredImageList []images.Image
-	logrus.Debug(filters)
-	for _, image := range imageList {
-		logrus.Debug(image.Name)
-		var matches int
-		for _, f := range filters {
-			var ref dockerreference.Reference
-			var err error
-			ref, err = dockerreference.ParseAnyReference(image.Name)
-			if err != nil {
-				return nil, fmt.Errorf("unable to parse image name: %s while filtering by reference because of %s", image.Name, err.Error())
-			}
-
-			familiarMatch, err := dockerreference.FamiliarMatch(f, ref)
-			if err != nil {
-				return nil, err
-			}
-			regexpMatch, err := regexp.MatchString(f, image.Name)
-			if err != nil {
-				return nil, err
-			}
-			if familiarMatch || regexpMatch {
-				matches++
-			}
-		}
-		if matches == len(filters) {
-			filteredImageList = append(filteredImageList, image)
-		}
-	}
-	return filteredImageList, nil
-}
-
-func filterDangling(imageList []images.Image, dangling bool) []images.Image {
-	var filtered []images.Image
-	for _, image := range imageList {
-		_, tag := imgutil.ParseRepoTag(image.Name)
-
-		if dangling && tag == "" {
-			filtered = append(filtered, image)
-		}
-		if !dangling && tag != "" {
-			filtered = append(filtered, image)
-		}
-	}
-	return filtered
-}
-
-func filterByLabel(ctx context.Context, client *containerd.Client, imageList []images.Image, filters map[string]string) ([]images.Image, error) {
-	for lk, lv := range filters {
-		var imageLabels []images.Image
-		for _, img := range imageList {
-			ci := containerd.NewImage(client, img)
-			cfg, _, err := imgutil.ReadImageConfig(ctx, ci)
-			if err != nil {
-				return nil, err
-			}
-			if val, ok := cfg.Config.Labels[lk]; ok {
-				if val == lv || lv == "" {
-					imageLabels = append(imageLabels, img)
-				}
-			}
-		}
-		imageList = imageLabels
 	}
 	return imageList, nil
 }
@@ -212,7 +162,7 @@ func printImages(ctx context.Context, client *containerd.Client, imageList []ima
 	printer := &imagePrinter{
 		w:            w,
 		quiet:        options.Quiet,
-		noTrunc:      options.Quiet,
+		noTrunc:      options.NoTrunc,
 		digestsFlag:  digestsFlag,
 		namesFlag:    options.Names,
 		tmpl:         tmpl,
@@ -281,7 +231,7 @@ func (x *imagePrinter) printImageSinglePlatform(ctx context.Context, img images.
 		logrus.WithError(err).Warnf("failed to get blob size of image %q for platform %q", img.Name, platforms.Format(ociPlatform))
 	}
 
-	size, err := unpackedImageSize(ctx, x.snapshotter, image)
+	size, err := imgutil.UnpackedImageSize(ctx, x.snapshotter, image)
 	if err != nil {
 		logrus.WithError(err).Warnf("failed to get unpacked size of image %q for platform %q", img.Name, platforms.Format(ociPlatform))
 	}
@@ -342,57 +292,4 @@ func (x *imagePrinter) printImageSinglePlatform(ctx context.Context, img images.
 		}
 	}
 	return nil
-}
-
-type snapshotKey string
-
-// recursive function to calculate total usage of key's parent
-func (key snapshotKey) add(ctx context.Context, s snapshots.Snapshotter, usage *snapshots.Usage) error {
-	if key == "" {
-		return nil
-	}
-	u, err := s.Usage(ctx, string(key))
-	if err != nil {
-		return err
-	}
-
-	usage.Add(u)
-
-	info, err := s.Stat(ctx, string(key))
-	if err != nil {
-		return err
-	}
-
-	key = snapshotKey(info.Parent)
-	return key.add(ctx, s, usage)
-}
-
-// unpackedImageSize is the size of the unpacked snapshots.
-// Does not contain the size of the blobs in the content store. (Corresponds to Docker).
-func unpackedImageSize(ctx context.Context, s snapshots.Snapshotter, img containerd.Image) (int64, error) {
-	diffIDs, err := img.RootFS(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	chainID := identity.ChainID(diffIDs).String()
-	usage, err := s.Usage(ctx, chainID)
-	if err != nil {
-		if errdefs.IsNotFound(err) {
-			logrus.WithError(err).Debugf("image %q seems not unpacked", img.Name())
-			return 0, nil
-		}
-		return 0, err
-	}
-
-	info, err := s.Stat(ctx, chainID)
-	if err != nil {
-		return 0, err
-	}
-
-	//add ChainID's parent usage to the total usage
-	if err := snapshotKey(info.Parent).add(ctx, s, &usage); err != nil {
-		return 0, err
-	}
-	return usage.Size, nil
 }

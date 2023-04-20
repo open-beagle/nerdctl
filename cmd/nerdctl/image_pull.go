@@ -45,9 +45,9 @@ func newPullCommand() *cobra.Command {
 	// #endregion
 
 	// #region verify flags
-	pullCommand.Flags().String("verify", "none", "Verify the image (none|cosign)")
+	pullCommand.Flags().String("verify", "none", "Verify the image (none|cosign|notation)")
 	pullCommand.RegisterFlagCompletionFunc("verify", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		return []string{"none", "cosign"}, cobra.ShellCompDirectiveNoFileComp
+		return []string{"none", "cosign", "notation"}, cobra.ShellCompDirectiveNoFileComp
 	})
 	pullCommand.Flags().String("cosign-key", "", "Path to the public key file, KMS, URI or Kubernetes Secret for --verify=cosign")
 	// #endregion
@@ -81,29 +81,24 @@ func processPullCommandFlags(cmd *cobra.Command) (types.ImagePullOptions, error)
 	if err != nil {
 		return types.ImagePullOptions{}, err
 	}
-	verifier, err := cmd.Flags().GetString("verify")
-	if err != nil {
-		return types.ImagePullOptions{}, err
-	}
-	cosignKey, err := cmd.Flags().GetString("cosign-key")
-	if err != nil {
-		return types.ImagePullOptions{}, err
-	}
 	ipfsAddressStr, err := cmd.Flags().GetString("ipfs-address")
 	if err != nil {
 		return types.ImagePullOptions{}, err
 	}
+	verifyOptions, err := processImageVerifyOptions(cmd)
+	if err != nil {
+		return types.ImagePullOptions{}, err
+	}
 	return types.ImagePullOptions{
-		GOptions:     globalOptions,
-		AllPlatforms: allPlatforms,
-		Platform:     platform,
-		Unpack:       unpackStr,
-		Quiet:        quiet,
-		Verify:       verifier,
-		CosignKey:    cosignKey,
-		IPFSAddress:  ipfsAddressStr,
-		Stdout:       cmd.OutOrStdout(),
-		Stderr:       cmd.OutOrStderr(),
+		GOptions:      globalOptions,
+		VerifyOptions: verifyOptions,
+		AllPlatforms:  allPlatforms,
+		Platform:      platform,
+		Unpack:        unpackStr,
+		Quiet:         quiet,
+		IPFSAddress:   ipfsAddressStr,
+		Stdout:        cmd.OutOrStdout(),
+		Stderr:        cmd.OutOrStderr(),
 	}, nil
 }
 

@@ -32,7 +32,7 @@ import (
 	"github.com/containerd/nerdctl/pkg/formatter"
 	"github.com/containerd/nerdctl/pkg/idutil/containerwalker"
 	"github.com/containerd/nerdctl/pkg/infoutil"
-	"github.com/containerd/typeurl"
+	"github.com/containerd/typeurl/v2"
 	"github.com/docker/go-units"
 	runtimespec "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
@@ -110,15 +110,8 @@ func updateAction(cmd *cobra.Command, args []string) error {
 			return err
 		},
 	}
-	for _, req := range args {
-		n, err := walker.Walk(ctx, req)
-		if err != nil {
-			return err
-		} else if n == 0 {
-			return fmt.Errorf("no such container %s", req)
-		}
-	}
-	return nil
+
+	return walker.WalkAll(ctx, args, true)
 }
 
 func getUpdateOption(cmd *cobra.Command, globalOptions types.GlobalCommandOptions) (updateResourceOptions, error) {

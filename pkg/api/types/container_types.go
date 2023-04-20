@@ -30,8 +30,8 @@ type ContainerStartOptions struct {
 	Attach bool
 }
 
-// KillOptions specifies options for `nerdctl (container) kill`.
-type KillOptions struct {
+// ContainerKillOptions specifies options for `nerdctl (container) kill`.
+type ContainerKillOptions struct {
 	Stdout io.Writer
 	Stderr io.Writer
 	// GOptions is the global options
@@ -66,6 +66,16 @@ type ContainerPauseOptions struct {
 	GOptions GlobalCommandOptions
 }
 
+// ContainerPruneOptions specifies options for `nerdctl (container) prune`.
+type ContainerPruneOptions struct {
+	Stdout io.Writer
+	// GOptions is the global options
+	GOptions GlobalCommandOptions
+}
+
+// ContainerUnpauseOptions specifies options for `nerdctl (container) unpause`.
+type ContainerUnpauseOptions ContainerPauseOptions
+
 // ContainerRemoveOptions specifies options for `nerdctl (container) rm`.
 type ContainerRemoveOptions struct {
 	Stdout io.Writer
@@ -75,6 +85,13 @@ type ContainerRemoveOptions struct {
 	Force bool
 	// Volumes removes anonymous volumes associated with the container
 	Volumes bool
+}
+
+// ContainerRenameOptions specifies options for `nerdctl (container) rename`.
+type ContainerRenameOptions struct {
+	Stdout io.Writer
+	// GOptions is the global options
+	GOptions GlobalCommandOptions
 }
 
 // ContainerTopOptions specifies options for `nerdctl top`.
@@ -129,6 +146,13 @@ type ContainerLogsOptions struct {
 	Until string
 }
 
+// ContainerWaitOptions specifies options for `nerdctl (container) wait`.
+type ContainerWaitOptions struct {
+	Stdout io.Writer
+	// GOptions is the global options.
+	GOptions GlobalCommandOptions
+}
+
 // ContainerExecOptions specifies options for `nerdctl (container) exec`
 type ContainerExecOptions struct {
 	GOptions GlobalCommandOptions
@@ -148,4 +172,39 @@ type ContainerExecOptions struct {
 	Privileged bool
 	// Username or UID (format: <name|uid>[:<group|gid>])
 	User string
+}
+
+// ContainerListOptions specifies options for `nerdctl (container) list`.
+type ContainerListOptions struct {
+	Stdout io.Writer
+	// GOptions is the global options.
+	GOptions GlobalCommandOptions
+	// Show all containers (default shows just running).
+	All bool
+	// Show n last created containers (includes all states). Non-positive values are ignored.
+	// In other words, if LastN is positive, All will be set to true.
+	LastN int
+	// Truncate output (e.g., container ID, command of the container main process, etc.) or not.
+	Truncate bool
+	// Only display container IDs.
+	Quiet bool
+	// Display total file sizes.
+	Size bool
+	// Format the output using the given Go template (e.g., '{{json .}}', 'table', 'wide').
+	Format string
+	// Filters matches containers based on given conditions.
+	Filters []string
+}
+
+// ContainerCpOptions specifies options for `nerdctl (container) cp`
+type ContainerCpOptions struct {
+	Container2Host bool
+	// Process id
+	Pid int
+	// Destination path to copy file to.
+	DestPath string
+	// Source path to copy file from.
+	SrcPath string
+	// Follow symbolic links in SRC_PATH
+	FollowSymLink bool
 }

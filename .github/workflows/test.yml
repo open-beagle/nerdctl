@@ -7,19 +7,23 @@ on:
       - 'release/**'
   pull_request:
 
+env:
+  GO_VERSION: 1.20.x
+
 jobs:
   project:
     name: Project Checks
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/setup-go@v3
-        with:
-          go-version: 1.19.x
-      - uses: actions/checkout@v3.3.0
+      - uses: actions/checkout@v3.5.2
         with:
           path: src/github.com/containerd/nerdctl
           fetch-depth: 100
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: src/github.com/containerd/nerdctl
       - uses: containerd/project-checks@v1.1.0
         with:
           working-directory: src/github.com/containerd/nerdctl
@@ -33,16 +37,18 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v3.3.0
+      - uses: actions/checkout@v3.5.2
         with:
           fetch-depth: 1
-      - uses: actions/setup-go@v3
+      - uses: actions/setup-go@v4
         with:
-          go-version: 1.19.x
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+          cache: true
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v3.4.0
         with:
-          version: v1.50.1
+          version: v1.51.1
           args: --verbose
       - name: yamllint-lint
         run: yamllint .
@@ -51,12 +57,14 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/setup-go@v3
-        with:
-          go-version: 1.19.x
-      - uses: actions/checkout@v3.3.0
+      - uses: actions/checkout@v3.5.2
         with:
           fetch-depth: 1
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+          cache: true
       - name: "Run unit tests"
         run: go test -v ./pkg/...
 
@@ -69,18 +77,18 @@ jobs:
         # ubuntu-20.04: cgroup v1, ubuntu-22.04: cgroup v2
         include:
           - ubuntu: 20.04
-            containerd: v1.5.17
+            containerd: v1.6.19
           - ubuntu: 20.04
-            containerd: v1.6.16
+            containerd: v1.7.0
           - ubuntu: 22.04
-            containerd: v1.6.16
+            containerd: v1.7.0
           - ubuntu: 22.04
             containerd: main
     env:
       UBUNTU_VERSION: "${{ matrix.ubuntu }}"
       CONTAINERD_VERSION: "${{ matrix.containerd }}"
     steps:
-      - uses: actions/checkout@v3.3.0
+      - uses: actions/checkout@v3.5.2
         with:
           fetch-depth: 1
       - name: "Prepare integration test environment"
@@ -105,54 +113,74 @@ jobs:
         # ubuntu-22.04: cgroup v1, ubuntu-22.04: cgroup v2
         include:
           - ubuntu: 20.04
-            containerd: v1.5.17
+            containerd: v1.6.19
+            target: test-integration-rootless
           - ubuntu: 20.04
-            containerd: v1.6.16
+            containerd: v1.7.0
+            target: test-integration-rootless
           - ubuntu: 22.04
-            containerd: v1.6.16
+            containerd: v1.7.0
+            target: test-integration-rootless
           - ubuntu: 22.04
             containerd: main
+            target: test-integration-rootless
+          - ubuntu: 20.04
+            containerd: v1.6.19
+            target: test-integration-rootless-port-slirp4netns
+          - ubuntu: 20.04
+            containerd: v1.7.0
+            target: test-integration-rootless-port-slirp4netns
+          - ubuntu: 22.04
+            containerd: v1.7.0
+            target: test-integration-rootless-port-slirp4netns
+          - ubuntu: 22.04
+            containerd: main
+            target: test-integration-rootless-port-slirp4netns
     env:
       UBUNTU_VERSION: "${{ matrix.ubuntu }}"
       CONTAINERD_VERSION: "${{ matrix.containerd }}"
+      TEST_TARGET: "${{ matrix.target }}"
     steps:
-      - uses: actions/checkout@v3.3.0
+      - uses: actions/checkout@v3.5.2
         with:
           fetch-depth: 1
       - name: "Register QEMU (tonistiigi/binfmt)"
         run: docker run --privileged --rm tonistiigi/binfmt --install all
       - name: "Prepare (network driver=slirp4netns, port driver=builtin)"
-        run: DOCKER_BUILDKIT=1 docker build -t test-integration-rootless --target test-integration-rootless --build-arg UBUNTU_VERSION=${UBUNTU_VERSION} --build-arg CONTAINERD_VERSION=${CONTAINERD_VERSION} .
-      - name: "Test    (network driver=slirp4netns, port driver=builtin)"
-        run: docker run -t --rm --privileged test-integration-rootless
-      - name: "Prepare (network driver=slirp4netns, port driver=slirp4netns)"
-        run: DOCKER_BUILDKIT=1 docker build -t test-integration-rootless-port-slirp4netns --target test-integration-rootless-port-slirp4netns --build-arg UBUNTU_VERSION=${UBUNTU_VERSION} --build-arg CONTAINERD_VERSION=${CONTAINERD_VERSION} .
-      - name: "Test    (network driver=slirp4netns, port driver=slirp4netns)"
-        run: docker run -t --rm --privileged test-integration-rootless-port-slirp4netns
+        run: DOCKER_BUILDKIT=1 docker build -t ${TEST_TARGET} --target ${TEST_TARGET} --build-arg UBUNTU_VERSION=${UBUNTU_VERSION} --build-arg CONTAINERD_VERSION=${CONTAINERD_VERSION} .
+      - name: "Test (network driver=slirp4netns, port driver=builtin)"
+        run: docker run -t --rm --privileged ${TEST_TARGET}
 
   cross:
     runs-on: ubuntu-22.04
     timeout-minutes: 40
+    strategy:
+      matrix:
+        go-version: ["1.19.x", "1.20.x"]
     steps:
-      - uses: actions/setup-go@v3
-        with:
-          go-version: 1.19.x
-      - uses: actions/checkout@v3.3.0
+      - uses: actions/checkout@v3.5.2
         with:
           fetch-depth: 1
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+          check-latest: true
       - name: "Cross"
-        run: make artifacts
+        run: GO_VERSION="$(echo ${{ matrix.go-version }} | sed -e s/.x//)" make artifacts
 
   test-integration-docker-compatibility:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
-      - uses: actions/setup-go@v3
-        with:
-          go-version: 1.19.x
-      - uses: actions/checkout@v3.3.0
+      - uses: actions/checkout@v3.5.2
         with:
           fetch-depth: 1
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          check-latest: true
       - name: "Register QEMU (tonistiigi/binfmt)"
         run: docker run --privileged --rm tonistiigi/binfmt --install all
       - name: "Prepare integration test environment"

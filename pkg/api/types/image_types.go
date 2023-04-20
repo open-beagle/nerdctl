@@ -149,8 +149,9 @@ type ImageInspectOptions struct {
 
 // ImagePushOptions specifies options for `nerdctl (image) push`.
 type ImagePushOptions struct {
-	Stdout   io.Writer
-	GOptions GlobalCommandOptions
+	Stdout      io.Writer
+	GOptions    GlobalCommandOptions
+	SignOptions ImageSignOptions
 	// Platforms convert content for a specific platform
 	Platforms []string
 	// AllPlatforms convert content for all platforms
@@ -162,12 +163,28 @@ type ImagePushOptions struct {
 	IpfsEnsureImage bool
 	// IpfsAddress multiaddr of IPFS API (default uses $IPFS_PATH env variable if defined or local directory ~/.ipfs)
 	IpfsAddress string
-	// Sign the image (none|cosign)
-	Sign string
-	// CosignKey Path to the private key file, KMS URI or Kubernetes Secret for --sign=cosign
-	CosignKey string
+	// Suppress verbose output
+	Quiet bool
 	// AllowNondistributableArtifacts allow pushing non-distributable artifacts
 	AllowNondistributableArtifacts bool
+}
+
+// ImagePullOptions specifies options for `nerdctl (image) pull`.
+type ImagePullOptions struct {
+	Stdout        io.Writer
+	Stderr        io.Writer
+	GOptions      GlobalCommandOptions
+	VerifyOptions ImageVerifyOptions
+	// Unpack the image for the current single platform (auto/true/false)
+	Unpack string
+	// Pull content for a specific platform
+	Platform []string
+	// Pull content for all platforms
+	AllPlatforms bool
+	// Suppress verbose output
+	Quiet bool
+	// multiaddr of IPFS API (default uses $IPFS_PATH env variable if defined or local directory ~/.ipfs)
+	IPFSAddress string
 }
 
 // ImageTagOptions specifies options for `nerdctl (image) tag`.
@@ -187,6 +204,47 @@ type ImageRemoveOptions struct {
 	GOptions GlobalCommandOptions
 	// Force removal of the image
 	Force bool
-	// Asynchronous mode
+	// Async asynchronous mode or not
 	Async bool
+}
+
+// ImagePruneOptions specifies options for `nerdctl image prune` and `nerdctl image rm`.
+type ImagePruneOptions struct {
+	Stdout io.Writer
+	// GOptions is the global options.
+	GOptions GlobalCommandOptions
+	// All Remove all unused images, not just dangling ones.
+	All bool
+	// Force will not prompt for confirmation.
+	Force bool
+}
+
+// ImageSaveOptions specifies options for `nerdctl (image) save`.
+type ImageSaveOptions struct {
+	Stdout   io.Writer
+	GOptions GlobalCommandOptions
+	// Export content for all platforms
+	AllPlatforms bool
+	// Export content for a specific platform
+	Platform []string
+}
+
+// ImageSignOptions contains options for signing an image. It contains options from
+// all providers. The `provider“ field determines which provider is used.
+type ImageSignOptions struct {
+	// Provider used to sign the image (none|cosign|notation)
+	Provider string
+	// CosignKey Path to the private key file, KMS URI or Kubernetes Secret for --sign=cosign
+	CosignKey string
+	// NotationKeyName Signing key name for a key previously added to notation's key list for --sign=notation
+	NotationKeyName string
+}
+
+// ImageVerifyOptions contains options for verifying an image. It contains options from
+// all providers. The `provider“ field determines which provider is used.
+type ImageVerifyOptions struct {
+	// Provider used to verify the image (none|cosign|notation)
+	Provider string
+	// CosignKey Path to the public key file, KMS URI or Kubernetes Secret for --verify=cosign
+	CosignKey string
 }

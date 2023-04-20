@@ -19,22 +19,21 @@ package image
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/nerdctl/pkg/api/types"
-	"github.com/containerd/nerdctl/pkg/cosignutil"
 	"github.com/containerd/nerdctl/pkg/imgutil"
 	"github.com/containerd/nerdctl/pkg/ipfs"
 	"github.com/containerd/nerdctl/pkg/platformutil"
 	"github.com/containerd/nerdctl/pkg/referenceutil"
+	"github.com/containerd/nerdctl/pkg/signutil"
 	"github.com/containerd/nerdctl/pkg/strutil"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/sirupsen/logrus"
 )
 
+// Pull pulls an image specified by `rawRef`.
 func Pull(ctx context.Context, client *containerd.Client, rawRef string, options types.ImagePullOptions) error {
 	ocispecPlatforms, err := platformutil.NewOCISpecPlatformSlice(options.AllPlatforms, options.Platform)
 	if err != nil {
@@ -54,12 +53,12 @@ func Pull(ctx context.Context, client *containerd.Client, rawRef string, options
 	return nil
 }
 
+// EnsureImage pulls an image either from ipfs or from registry.
 func EnsureImage(ctx context.Context, client *containerd.Client, rawRef string, ocispecPlatforms []v1.Platform, pull string, unpack *bool, quiet bool, options types.ImagePullOptions) (*imgutil.EnsuredImage, error) {
-
 	var ensured *imgutil.EnsuredImage
 
 	if scheme, ref, err := referenceutil.ParseIPFSRefWithScheme(rawRef); err == nil {
-		if options.Verify != "none" {
+		if options.VerifyOptions.Provider != "none" {
 			return nil, errors.New("--verify flag is not supported on IPFS as of now")
 		}
 
@@ -84,24 +83,9 @@ func EnsureImage(ctx context.Context, client *containerd.Client, rawRef string, 
 		return ensured, nil
 	}
 
-	ref := rawRef
-	var err error
-	switch options.Verify {
-	case "cosign":
-		experimental := options.GOptions.Experimental
-
-		if !experimental {
-			return nil, fmt.Errorf("cosign only work with enable experimental feature")
-		}
-
-		ref, err = cosignutil.VerifyCosign(ctx, rawRef, options.CosignKey, options.GOptions.HostsDir)
-		if err != nil {
-			return nil, err
-		}
-	case "none":
-		logrus.Debugf("verification process skipped")
-	default:
-		return nil, fmt.Errorf("no verifier found: %s", options.Verify)
+	ref, err := signutil.Verify(ctx, rawRef, options.GOptions.HostsDir, options.GOptions.Experimental, options.VerifyOptions)
+	if err != nil {
+		return nil, err
 	}
 
 	ensured, err = imgutil.EnsureImage(ctx, client, options.Stdout, options.Stderr, options.GOptions.Snapshotter, ref,

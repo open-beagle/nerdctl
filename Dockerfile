@@ -18,16 +18,16 @@
 # TODO: verify commit hash
 
 # Basic deps
-ARG CONTAINERD_VERSION=v1.6.16
-ARG RUNC_VERSION=v1.1.4
+ARG CONTAINERD_VERSION=v1.7.0
+ARG RUNC_VERSION=v1.1.5
 ARG CNI_PLUGINS_VERSION=v1.2.0
 
 # Extra deps: Build
-ARG BUILDKIT_VERSION=v0.11.2
+ARG BUILDKIT_VERSION=v0.11.5
 # Extra deps: Lazy-pulling
-ARG STARGZ_SNAPSHOTTER_VERSION=v0.14.1
+ARG STARGZ_SNAPSHOTTER_VERSION=v0.14.3
 # Extra deps: Nydus Lazy-pulling
-ARG NYDUS_VERSION=v2.1.3
+ARG NYDUS_VERSION=v2.2.0
 # Extra deps: Encryption
 ARG IMGCRYPT_VERSION=v1.1.7
 # Extra deps: Rootless
@@ -36,68 +36,70 @@ ARG SLIRP4NETNS_VERSION=v1.2.0
 # Extra deps: bypass4netns
 ARG BYPASS4NETNS_VERSION=v0.3.0
 # Extra deps: FUSE-OverlayFS
-ARG FUSE_OVERLAYFS_VERSION=v1.10
+ARG FUSE_OVERLAYFS_VERSION=v1.11
 ARG CONTAINERD_FUSE_OVERLAYFS_VERSION=v1.0.5
 # Extra deps: IPFS
-ARG KUBO_VERSION=v0.18.0
+ARG KUBO_VERSION=v0.19.1
 # Extra deps: Init
 ARG TINI_VERSION=v0.19.0
 # Extra deps: Debug
 ARG BUILDG_VERSION=v0.4.1
 
 # Test deps
-ARG GO_VERSION=1.19
+ARG GO_VERSION=1.20
 ARG UBUNTU_VERSION=22.04
 ARG CONTAINERIZED_SYSTEMD_VERSION=v0.1.1
 ARG GOTESTSUM_VERSION=v1.9.0
 
+FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
+
+
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bullseye AS build-base-debian
+COPY --from=xx / /
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && \
+  apt-get install -y git pkg-config dpkg-dev
+ARG TARGETARCH
 # libbtrfs: for containerd
 # libseccomp: for runc and bypass4netns
-RUN dpkg --add-architecture arm64 && \
-  dpkg --add-architecture amd64 && \
-  apt-get update && \
-  apt-get install -y crossbuild-essential-amd64 crossbuild-essential-arm64 git libbtrfs-dev:amd64 libbtrfs-dev:arm64 libseccomp-dev:amd64 libseccomp-dev:arm64
+RUN xx-apt-get update && \
+  xx-apt-get install -y binutils gcc libc6-dev libbtrfs-dev libseccomp-dev
 
 FROM build-base-debian AS build-containerd
+ARG TARGETARCH
 ARG CONTAINERD_VERSION
 RUN git clone https://github.com/containerd/containerd.git /go/src/github.com/containerd/containerd
 WORKDIR /go/src/github.com/containerd/containerd
 RUN git checkout ${CONTAINERD_VERSION} && \
-  mkdir -p /out /out/amd64 /out/arm64 && \
+  mkdir -p /out /out/$TARGETARCH && \
   cp -a containerd.service /out
 ENV CGO_ENABLED=1
 ENV GO111MODULE=off
 # TODO: how to build containerd as static binaries? https://github.com/containerd/containerd/issues/6158
-RUN GOARCH=amd64 CC=x86_64-linux-gnu-gcc make && \
-  cp -a bin/containerd bin/containerd-shim-runc-v2 bin/ctr /out/amd64
-RUN git clean -xfd
-RUN GOARCH=arm64 CC=aarch64-linux-gnu-gcc make && \
-  cp -a bin/containerd bin/containerd-shim-runc-v2 bin/ctr /out/arm64
+RUN GO=xx-go make && \
+  cp -a bin/containerd bin/containerd-shim-runc-v2 bin/ctr /out/$TARGETARCH
 
 FROM build-base-debian AS build-runc
 ARG RUNC_VERSION
+ARG TARGETARCH
 RUN git clone https://github.com/opencontainers/runc.git /go/src/github.com/opencontainers/runc
 WORKDIR /go/src/github.com/opencontainers/runc
 RUN git checkout ${RUNC_VERSION} && \
   mkdir -p /out
 ENV CGO_ENABLED=1
-RUN GOARCH=amd64 CC=x86_64-linux-gnu-gcc make static && \
-  cp -a runc /out/runc.amd64
-RUN GOARCH=arm64 CC=aarch64-linux-gnu-gcc make static && \
-  cp -a runc /out/runc.arm64
+RUN GO=xx-go make static && \
+  xx-verify --static runc && cp -v -a runc /out/runc.${TARGETARCH}
 
 FROM build-base-debian AS build-bypass4netns
 ARG BYPASS4NETNS_VERSION
+ARG TARGETARCH
 RUN git clone https://github.com/rootless-containers/bypass4netns.git /go/src/github.com/rootless-containers/bypass4netns
 WORKDIR /go/src/github.com/rootless-containers/bypass4netns
 RUN git checkout ${BYPASS4NETNS_VERSION} && \
-  mkdir -p /out/amd64 /out/arm64
+  mkdir -p /out/${TARGETARCH}
 ENV CGO_ENABLED=1
-RUN GOARCH=amd64 CC=x86_64-linux-gnu-gcc make static && \
-  cp -a bypass4netns bypass4netnsd /out/amd64
-RUN GOARCH=arm64 CC=aarch64-linux-gnu-gcc make static && \
-  cp -a bypass4netns bypass4netnsd /out/arm64
+RUN GO=xx-go make static && \
+  xx-verify --static bypass4netns && cp -a bypass4netns bypass4netnsd /out/${TARGETARCH}
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build-base
 RUN apk add --no-cache make git curl
@@ -280,7 +282,7 @@ WORKDIR /go/src/github.com/containerd/nerdctl
 VOLUME /tmp
 ENV CGO_ENABLED=0
 # copy cosign binary for integration test
-COPY --from=gcr.io/projectsigstore/cosign:v1.3.1@sha256:3cd9b3a866579dc2e0cf2fdea547f4c9a27139276cc373165c26842bc594b8bd /ko-app/cosign /usr/local/bin/cosign
+COPY --from=gcr.io/projectsigstore/cosign:v2.0.0@sha256:728944a9542a7235b4358c4ab2bcea855840e9d4b9594febca5c2207f5da7f38 /ko-app/cosign /usr/local/bin/cosign
 # enable offline ipfs for integration test
 COPY ./Dockerfile.d/test-integration-etc_containerd-stargz-grpc_config.toml /etc/containerd-stargz-grpc/config.toml
 COPY ./Dockerfile.d/test-integration-ipfs-offline.service /usr/local/lib/systemd/system/
