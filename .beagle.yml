@@ -120,7 +120,7 @@ steps:
         path: /var/run/docker.sock
     settings:
       dockerfile: .beagle/dockerfile
-      base: registry.cn-qingdao.aliyuncs.com/wod/alpine:3-loong64
+      base: registry.cn-qingdao.aliyuncs.com/wod/alpine:3-mips64le
       repo: wod/nerdctl
       version: v1.3.1
       channel: loong64
