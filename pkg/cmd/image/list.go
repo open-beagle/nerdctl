@@ -119,7 +119,7 @@ type imagePrintable struct {
 	Name         string // image name
 	Size         string // the size of the unpacked snapshots.
 	BlobSize     string // the size of the blobs in the content store (nerdctl extension)
-	// TODO: "SharedSize", "UniqueSize", "VirtualSize"
+	// TODO: "SharedSize", "UniqueSize"
 	Platform string // nerdctl extension
 }
 
@@ -233,7 +233,8 @@ func (x *imagePrinter) printImageSinglePlatform(ctx context.Context, img images.
 
 	size, err := imgutil.UnpackedImageSize(ctx, x.snapshotter, image)
 	if err != nil {
-		logrus.WithError(err).Warnf("failed to get unpacked size of image %q for platform %q", img.Name, platforms.Format(ociPlatform))
+		// Warnf is too verbose: https://github.com/containerd/nerdctl/issues/2058
+		logrus.WithError(err).Debugf("failed to get unpacked size of image %q for platform %q", img.Name, platforms.Format(ociPlatform))
 	}
 
 	p := imagePrintable{
