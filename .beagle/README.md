@@ -7,7 +7,7 @@ git remote add upstream git@github.com:containerd/nerdctl.git
 
 git fetch upstream
 
-git merge v1.3.1
+git merge v1.4.0
 ```
 
 ## debug
@@ -22,7 +22,7 @@ registry.cn-qingdao.aliyuncs.com/wod/golang:1.19-loongnix \
 rm -rf vendor && go mod vendor
 
 # patch vendor
-git apply .beagle/0001-support-loong64.patch
+# git apply .beagle/0001-support-loong64.patch
 
 # build
 docker run -it \
