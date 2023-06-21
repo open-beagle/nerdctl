@@ -18,18 +18,18 @@ docker run -it \
 --rm \
 -v $PWD/:/go/src/github.com/containerd/nerdctl \
 -w /go/src/github.com/containerd/nerdctl \
-registry.cn-qingdao.aliyuncs.com/wod/golang:1.19-loongnix \
+registry.cn-qingdao.aliyuncs.com/wod/golang:1.20-loongnix \
 rm -rf vendor && go mod vendor
 
 # patch vendor
-# git apply .beagle/0001-support-loong64.patch
+git apply .beagle/0001-support-loong64.patch
 
 # build
 docker run -it \
 --rm \
 -v $PWD/:/go/src/github.com/containerd/nerdctl \
 -w /go/src/github.com/containerd/nerdctl \
-registry.cn-qingdao.aliyuncs.com/wod/golang:1.19-loongnix \
+registry.cn-qingdao.aliyuncs.com/wod/golang:1.20-loongnix \
 bash .beagle/build.sh
 
 # check
