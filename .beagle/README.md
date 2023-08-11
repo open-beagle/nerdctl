@@ -7,7 +7,7 @@ git remote add upstream git@github.com:containerd/nerdctl.git
 
 git fetch upstream
 
-git merge v1.4.0
+git merge v1.5.0
 ```
 
 ## debug
