@@ -167,7 +167,7 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 	}
 	internalLabels.logURI = logConfig.LogURI
 
-	restartOpts, err := generateRestartOpts(ctx, client, options.Restart, logConfig.LogURI)
+	restartOpts, err := generateRestartOpts(ctx, client, options.Restart, logConfig.LogURI, options.InRun)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -323,10 +323,9 @@ func generateRootfsOpts(args []string, id string, ensured *imgutil.EnsuredImage,
 		for ind, env := range ensured.ImageConfig.Env {
 			if strings.HasPrefix(env, "PATH=") {
 				break
-			} else {
-				if ind == len(ensured.ImageConfig.Env)-1 {
-					opts = append(opts, oci.WithDefaultPathEnv)
-				}
+			}
+			if ind == len(ensured.ImageConfig.Env)-1 {
+				opts = append(opts, oci.WithDefaultPathEnv)
 			}
 		}
 	} else {
@@ -608,6 +607,23 @@ func dockercompatMounts(mountPoints []*mountutil.Processed) []dockercompat.Mount
 		// volume only support local driver
 		if mp.Type == "volume" {
 			result[i].Driver = "local"
+		}
+	}
+	return result
+}
+
+func processeds(mountPoints []dockercompat.MountPoint) []*mountutil.Processed {
+	result := make([]*mountutil.Processed, len(mountPoints))
+	for i := range mountPoints {
+		mp := mountPoints[i]
+		result[i] = &mountutil.Processed{
+			Type: mp.Type,
+			Name: mp.Name,
+			Mount: specs.Mount{
+				Source:      mp.Source,
+				Destination: mp.Destination,
+			},
+			Mode: mp.Mode,
 		}
 	}
 	return result

@@ -5,13 +5,13 @@ run:
 linters:
   disable-all: true
   enable:
-    - depguard
+    # - depguard
     - gofmt
     - goimports
     - govet
     - ineffassign
     - misspell
-    - nakedret
+    # - nakedret
     - prealloc
     - typecheck
     # - asciicheck
@@ -134,3 +134,9 @@ linters-settings:
       - typeUnparen
       - unnamedResult
       - unnecessaryBlock
+
+issues:
+  exclude-rules:
+    - linters:
+        - revive
+      text: "unused-parameter"

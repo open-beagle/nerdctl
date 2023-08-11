@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/compose-spec/compose-go/types"
@@ -104,6 +105,7 @@ services:
     volumes:
       - wordpress:/var/www/html
     pids_limit: 100
+    shm_size: 1G
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -150,7 +152,7 @@ volumes:
 	assert.Assert(t, wp.Image == "wordpress:5.7")
 	assert.Assert(t, len(wp.Containers) == 1)
 	wp1 := wp.Containers[0]
-	assert.Assert(t, wp1.Name == fmt.Sprintf("%s_wordpress_1", project.Name))
+	assert.Assert(t, wp1.Name == DefaultContainerName(project.Name, "wordpress", "1"))
 	assert.Assert(t, in(wp1.RunArgs, "--name="+wp1.Name))
 	assert.Assert(t, in(wp1.RunArgs, "--hostname=wordpress"))
 	assert.Assert(t, in(wp1.RunArgs, fmt.Sprintf("--net=%s_default", project.Name)))
@@ -171,6 +173,7 @@ volumes:
 	assert.Assert(t, in(wp1.RunArgs, "--log-opt=max-file=2"))
 	assert.Assert(t, in(wp1.RunArgs, "--add-host=test.com:172.19.1.1"))
 	assert.Assert(t, in(wp1.RunArgs, "--add-host=test2.com:172.19.1.2"))
+	assert.Assert(t, in(wp1.RunArgs, "--shm-size=1073741824"))
 
 	dbSvc, err := project.GetService("db")
 	assert.NilError(t, err)
@@ -181,7 +184,7 @@ volumes:
 	t.Logf("db: %+v", db)
 	assert.Assert(t, len(db.Containers) == 1)
 	db1 := db.Containers[0]
-	assert.Assert(t, db1.Name == fmt.Sprintf("%s_db_1", project.Name))
+	assert.Assert(t, db1.Name == DefaultContainerName(project.Name, "db", "1"))
 	assert.Assert(t, in(db1.RunArgs, "--hostname=db"))
 	assert.Assert(t, in(db1.RunArgs, fmt.Sprintf("-v=%s_db:/var/lib/mysql", project.Name)))
 	assert.Assert(t, in(db1.RunArgs, "--stop-signal=SIGUSR1"))
@@ -216,7 +219,7 @@ services:
 	t.Logf("foo: %+v", foo)
 	assert.Assert(t, len(foo.Containers) == 2)
 	for i, c := range foo.Containers {
-		assert.Assert(t, c.Name == fmt.Sprintf("%s_foo_%d", project.Name, i+1))
+		assert.Assert(t, c.Name == DefaultContainerName(project.Name, "foo", strconv.Itoa(i+1)))
 		assert.Assert(t, in(c.RunArgs, "--name="+c.Name))
 		assert.Assert(t, in(c.RunArgs, fmt.Sprintf("--cpus=%f", 0.42)))
 		assert.Assert(t, in(c.RunArgs, "-m=44040192"))
@@ -257,6 +260,10 @@ services:
           devices:
           - capabilities: ["utility"]
             count: all
+  qux: # replicas=0
+    image: nginx:alpine
+    deploy:
+      replicas: 0
 `
 	comp := testutil.NewComposeDir(t, dockerComposeYAML)
 	defer comp.CleanUp()
@@ -273,7 +280,7 @@ services:
 	t.Logf("foo: %+v", foo)
 	assert.Assert(t, len(foo.Containers) == 3)
 	for i, c := range foo.Containers {
-		assert.Assert(t, c.Name == fmt.Sprintf("%s_foo_%d", project.Name, i+1))
+		assert.Assert(t, c.Name == DefaultContainerName(project.Name, "foo", strconv.Itoa(i+1)))
 		assert.Assert(t, in(c.RunArgs, "--name="+c.Name))
 
 		assert.Assert(t, in(c.RunArgs, "--restart=no"))
@@ -307,6 +314,16 @@ services:
 		assert.Assert(t, in(c.RunArgs, "--restart=no"))
 		assert.Assert(t, in(c.RunArgs, `--gpus=capabilities=utility,count=-1`))
 	}
+
+	quxSvc, err := project.GetService("qux")
+	assert.NilError(t, err)
+
+	qux, err := Parse(project, quxSvc)
+	assert.NilError(t, err)
+
+	t.Logf("qux: %+v", qux)
+	assert.Assert(t, len(qux.Containers) == 0)
+
 }
 
 func TestParseRelative(t *testing.T) {

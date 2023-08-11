@@ -18,12 +18,12 @@
 # TODO: verify commit hash
 
 # Basic deps
-ARG CONTAINERD_VERSION=v1.7.1
-ARG RUNC_VERSION=v1.1.7
+ARG CONTAINERD_VERSION=v1.7.3
+ARG RUNC_VERSION=v1.1.8
 ARG CNI_PLUGINS_VERSION=v1.3.0
 
 # Extra deps: Build
-ARG BUILDKIT_VERSION=v0.11.6
+ARG BUILDKIT_VERSION=v0.12.0
 # Extra deps: Lazy-pulling
 ARG STARGZ_SNAPSHOTTER_VERSION=v0.14.3
 # Extra deps: Encryption
@@ -37,7 +37,7 @@ ARG BYPASS4NETNS_VERSION=v0.3.0
 ARG FUSE_OVERLAYFS_VERSION=v1.12
 ARG CONTAINERD_FUSE_OVERLAYFS_VERSION=v1.0.6
 # Extra deps: IPFS
-ARG KUBO_VERSION=v0.20.0
+ARG KUBO_VERSION=v0.21.0
 # Extra deps: Init
 ARG TINI_VERSION=v0.19.0
 # Extra deps: Debug
@@ -47,8 +47,9 @@ ARG BUILDG_VERSION=v0.4.1
 ARG GO_VERSION=1.20
 ARG UBUNTU_VERSION=22.04
 ARG CONTAINERIZED_SYSTEMD_VERSION=v0.1.1
-ARG GOTESTSUM_VERSION=v1.10.0
-ARG NYDUS_VERSION=v2.2.1
+ARG GOTESTSUM_VERSION=v1.10.1
+ARG NYDUS_VERSION=v2.2.2
+ARG SOCI_SNAPSHOTTER_VERSION=0.3.0
 
 FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
 
@@ -282,13 +283,21 @@ VOLUME /tmp
 ENV CGO_ENABLED=0
 # copy cosign binary for integration test
 COPY --from=gcr.io/projectsigstore/cosign:v2.0.0@sha256:728944a9542a7235b4358c4ab2bcea855840e9d4b9594febca5c2207f5da7f38 /ko-app/cosign /usr/local/bin/cosign
+# installing soci for integration test
+ARG SOCI_SNAPSHOTTER_VERSION
+RUN fname="soci-snapshotter-${SOCI_SNAPSHOTTER_VERSION}-${TARGETOS:-linux}-${TARGETARCH:-amd64}.tar.gz" && \
+  curl -o "${fname}" -fSL "https://github.com/awslabs/soci-snapshotter/releases/download/v${SOCI_SNAPSHOTTER_VERSION}/${fname}" && \
+  tar -C /usr/local/bin -xvf "${fname}" soci soci-snapshotter-grpc
 # enable offline ipfs for integration test
 COPY ./Dockerfile.d/test-integration-etc_containerd-stargz-grpc_config.toml /etc/containerd-stargz-grpc/config.toml
 COPY ./Dockerfile.d/test-integration-ipfs-offline.service /usr/local/lib/systemd/system/
 COPY ./Dockerfile.d/test-integration-buildkit-nerdctl-test.service /usr/local/lib/systemd/system/
+COPY ./Dockerfile.d/test-integration-soci-snapshotter.service /usr/local/lib/systemd/system/
 RUN cp /usr/local/bin/tini /usr/local/bin/tini-custom
+# using test integration containerd config
+COPY ./Dockerfile.d/test-integration-etc_containerd_config.toml /etc/containerd/config.toml
 # install ipfs service. avoid using 5001(api)/8080(gateway) which are reserved by tests.
-RUN systemctl enable test-integration-ipfs-offline test-integration-buildkit-nerdctl-test && \
+RUN systemctl enable test-integration-ipfs-offline test-integration-buildkit-nerdctl-test test-integration-soci-snapshotter && \
   ipfs init && \
   ipfs config Addresses.API "/ip4/127.0.0.1/tcp/5888" && \
   ipfs config Addresses.Gateway "/ip4/127.0.0.1/tcp/5889"

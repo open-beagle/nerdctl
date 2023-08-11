@@ -28,6 +28,8 @@ type ContainerStartOptions struct {
 	GOptions GlobalCommandOptions
 	// Attach specifies whether to attach to the container's stdio.
 	Attach bool
+	// The key sequence for detaching a container.
+	DetachKeys string
 }
 
 // ContainerKillOptions specifies options for `nerdctl (container) kill`.
@@ -52,6 +54,9 @@ type ContainerCreateOptions struct {
 	// NerdctlArgs is the arguments of nerdctl
 	NerdctlArgs []string
 
+	// InRun is true when it's generated in the `run` command
+	InRun bool
+
 	// #region for basic flags
 	// Interactive keep STDIN open even if not attached
 	Interactive bool
@@ -59,6 +64,8 @@ type ContainerCreateOptions struct {
 	TTY bool
 	// Detach runs container in background and print container ID
 	Detach bool
+	// The key sequence for detaching a container.
+	DetachKeys string
 	// Restart specifies the policy to apply when a container exits
 	Restart string
 	// Rm specifies whether to remove the container automatically when it exits
@@ -178,6 +185,8 @@ type ContainerCreateOptions struct {
 	Tmpfs []string
 	// Mount specifies a list of mounts to mount
 	Mount []string
+	// VolumesFrom specifies a list of specified containers to mount from
+	VolumesFrom []string
 	// #endregion
 
 	// #region for rootfs flags
@@ -384,7 +393,6 @@ type ContainerExecOptions struct {
 
 // ContainerListOptions specifies options for `nerdctl (container) list`.
 type ContainerListOptions struct {
-	Stdout io.Writer
 	// GOptions is the global options.
 	GOptions GlobalCommandOptions
 	// Show all containers (default shows just running).
@@ -394,25 +402,39 @@ type ContainerListOptions struct {
 	LastN int
 	// Truncate output (e.g., container ID, command of the container main process, etc.) or not.
 	Truncate bool
-	// Only display container IDs.
-	Quiet bool
 	// Display total file sizes.
 	Size bool
-	// Format the output using the given Go template (e.g., '{{json .}}', 'table', 'wide').
-	Format string
 	// Filters matches containers based on given conditions.
 	Filters []string
 }
 
 // ContainerCpOptions specifies options for `nerdctl (container) cp`
 type ContainerCpOptions struct {
+	// GOptions is the global options.
+	GOptions GlobalCommandOptions
+	// ContainerReq is name, short ID, or long ID of container to copy to/from.
+	ContainerReq   string
 	Container2Host bool
-	// Process id
-	Pid int
 	// Destination path to copy file to.
 	DestPath string
 	// Source path to copy file from.
 	SrcPath string
 	// Follow symbolic links in SRC_PATH
 	FollowSymLink bool
+}
+
+// ContainerStatsOptions specifies options for `nerdctl stats`.
+type ContainerStatsOptions struct {
+	Stdout io.Writer
+	Stderr io.Writer
+	// GOptions is the global options.
+	GOptions GlobalCommandOptions
+	// Show all containers (default shows just running).
+	All bool
+	// Pretty-print images using a Go template, e.g., {{json .}}.
+	Format string
+	// Disable streaming stats and only pull the first result.
+	NoStream bool
+	// Do not truncate output.
+	NoTrunc bool
 }

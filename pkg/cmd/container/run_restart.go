@@ -50,7 +50,7 @@ func checkRestartCapabilities(ctx context.Context, client *containerd.Client, re
 	return true, nil
 }
 
-func generateRestartOpts(ctx context.Context, client *containerd.Client, restartFlag, logURI string) ([]containerd.NewContainerOpts, error) {
+func generateRestartOpts(ctx context.Context, client *containerd.Client, restartFlag, logURI string, inRun bool) ([]containerd.NewContainerOpts, error) {
 	if restartFlag == "" || restartFlag == "no" {
 		return nil, nil
 	}
@@ -62,7 +62,11 @@ func generateRestartOpts(ctx context.Context, client *containerd.Client, restart
 	if err != nil {
 		return nil, err
 	}
-	opts := []containerd.NewContainerOpts{restart.WithPolicy(policy), restart.WithStatus(containerd.Running)}
+	desireStatus := containerd.Created
+	if inRun {
+		desireStatus = containerd.Running
+	}
+	opts := []containerd.NewContainerOpts{restart.WithPolicy(policy), restart.WithStatus(desireStatus)}
 	if logURI != "" {
 		opts = append(opts, restart.WithLogURIString(logURI))
 	}
@@ -78,5 +82,31 @@ func UpdateContainerRestartPolicyLabel(ctx context.Context, client *containerd.C
 	if err != nil {
 		return err
 	}
-	return container.Update(ctx, restart.WithPolicy(policy))
+
+	updateOpts := []containerd.UpdateContainerOpts{restart.WithPolicy(policy)}
+
+	lables, err := container.Labels(ctx)
+	if err != nil {
+		return err
+	}
+	_, statusLabelExist := lables[restart.StatusLabel]
+	if !statusLabelExist {
+		task, err := container.Task(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to get task:%w", err)
+		}
+		desireStatus := containerd.Running
+		status, err := task.Status(ctx)
+		if err == nil {
+			switch status.Status {
+			case containerd.Stopped:
+				desireStatus = containerd.Stopped
+			case containerd.Created:
+				desireStatus = containerd.Created
+			}
+		}
+		updateOpts = append(updateOpts, restart.WithStatus(desireStatus))
+	}
+
+	return container.Update(ctx, updateOpts...)
 }

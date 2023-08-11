@@ -150,6 +150,7 @@ Basic flags:
 - :whale: `--uts=(host)` : UTS namespace to use
 - :whale: `--stop-signal`: Signal to stop a container (default "SIGTERM")
 - :whale: `--stop-timeout`: Timeout (in seconds) to stop a container
+- :whale: `--detach-keys`: Override the default detach keys
 
 Platform flags:
 
@@ -250,12 +251,12 @@ Volume flags:
   consisting of a `<key>=<value>` tuple.
   e.g., `-- mount type=bind,source=/src,target=/app,bind-propagation=shared`.
   - :whale: `type`: Current supported mount types are `bind`, `volume`, `tmpfs`.
-    The defaul type will be set to `volume` if not specified.
-    i.e., `--mount src=vol-1,dst=/app,readonly` equals `--mount type=volum,src=vol-1,dst=/app,readonly`
+    The default type will be set to `volume` if not specified.
+    i.e., `--mount src=vol-1,dst=/app,readonly` equals `--mount type=volume,src=vol-1,dst=/app,readonly`
   - Common Options:
     - :whale: `src`, `source`: Mount source spec for bind and volume. Mandatory for bind.
     - :whale: `dst`, `destination`, `target`: Mount destination spec.
-    - :whale: `readonly`, `ro`, `rw`, `rro`: Filesystem permissinos.
+    - :whale: `readonly`, `ro`, `rw`, `rro`: Filesystem permissions.
   - Options specific to `bind`:
     - :whale: `bind-propagation`: `shared`, `slave`, `private`, `rshared`, `rslave`, or `rprivate`(default).
     - :whale: `bind-nonrecursive`: `true` or `false`(default). If set to true, submounts are not recursively bind-mounted. This option is useful for readonly bind mount.
@@ -266,6 +267,7 @@ Volume flags:
       Defaults to `1777` or world-writable.
   - Options specific to `volume`:
     - unimplemented options: `volume-nocopy`, `volume-label`, `volume-driver`, `volume-opt`
+- :whale: `--volumes-from`: Mount volumes from the specified container(s), e.g. "--volumes-from my-container".
 
 Rootfs flags:
 
@@ -370,10 +372,10 @@ IPFS flags:
 - :nerd_face: `--ipfs-address`: Multiaddr of IPFS API (default uses `$IPFS_PATH` env variable if defined or local directory `~/.ipfs`)
 
 Unimplemented `docker run` flags:
-    `--attach`, `--blkio-weight-device`, `--cpu-rt-*`, `--detach-keys`, `--device-*`,
+    `--attach`, `--blkio-weight-device`, `--cpu-rt-*`, `--device-*`,
     `--disable-content-trust`, `--domainname`, `--expose`, `--health-*`, `--ip6`, `--isolation`, `--no-healthcheck`,
     `--link*`, `--mac-address`, `--publish-all`, `--sig-proxy`, `--storage-opt`,
-    `--userns`, `--volume-driver`, `--volumes-from`
+    `--userns`, `--volume-driver`
 
 ### :whale: :blue_square: nerdctl exec
 
@@ -491,7 +493,7 @@ Usage: `nerdctl logs [OPTIONS] CONTAINER`
 
 Flags:
 
-- :whale: `--f, --follow`: Follow log output
+- :whale: `-f, --follow`: Follow log output
 - :whale: `--since`: Show logs since timestamp (e.g. 2013-01-02T13:23:37Z) or relative (e.g. 42m for 42 minutes)
 - :whale: `--until`: Show logs before a timestamp (e.g. 2013-01-02T13:23:37Z) or relative (e.g. 42m for 42 minutes)
 - :whale: `-t, --timestamps`: Show timestamps
@@ -538,8 +540,9 @@ Usage: `nerdctl start [OPTIONS] CONTAINER [CONTAINER...]`
 Flags:
 
 - :whale: `-a, --attach`: Attach STDOUT/STDERR and forward signals
+- :whale: `--detach-keys`: Override the default detach keys
 
-Unimplemented `docker start` flags: `--checkpoint`, `--checkpoint-dir`, `--detach-keys`, `--interactive`
+Unimplemented `docker start` flags: `--checkpoint`, `--checkpoint-dir`, `--interactive`
 
 ### :whale: nerdctl restart
 
@@ -652,8 +655,9 @@ Flags:
 - :whale: `--iidfile=FILE`: Write the image ID to the file
 - :nerd_face: `--ipfs`: Build image with pulling base images from IPFS. See [`ipfs.md`](./ipfs.md) for details.
 - :whale: `--label`: Set metadata for an image
+- :whale: `--network=(default|host|none)`: Set the networking mode for the RUN instructions during build.(compatible with `buildctl build`)
 
-Unimplemented `docker build` flags: `--add-host`, `--network`, `--squash`
+Unimplemented `docker build` flags: `--add-host`, `--squash`
 
 ### :whale: nerdctl commit
 

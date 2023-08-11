@@ -23,8 +23,10 @@ import (
 	"os/signal"
 	"strings"
 
+	"github.com/compose-spec/compose-go/types"
 	"github.com/containerd/containerd"
 	"github.com/containerd/nerdctl/pkg/composer/pipetagger"
+	"github.com/containerd/nerdctl/pkg/composer/serviceparser"
 	"github.com/containerd/nerdctl/pkg/labels"
 
 	"github.com/sirupsen/logrus"
@@ -39,7 +41,11 @@ type LogsOptions struct {
 }
 
 func (c *Composer) Logs(ctx context.Context, lo LogsOptions, services []string) error {
-	serviceNames, err := c.ServiceNames(services...)
+	var serviceNames []string
+	err := c.project.WithServices(services, func(svc types.ServiceConfig) error {
+		serviceNames = append(serviceNames, svc.Name)
+		return nil
+	}, types.IgnoreDependencies)
 	if err != nil {
 		return err
 	}
@@ -65,7 +71,7 @@ func (c *Composer) logs(ctx context.Context, containers []containerd.Container, 
 			return err
 		}
 		name := info.Labels[labels.Name]
-		logTag := strings.TrimPrefix(name, c.project.Name+"_")
+		logTag := strings.TrimPrefix(name, c.project.Name+serviceparser.Separator)
 		if l := len(logTag); l > logTagMaxLen {
 			logTagMaxLen = l
 		}

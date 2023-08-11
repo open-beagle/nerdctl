@@ -18,6 +18,8 @@ package containerutil
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -102,6 +104,15 @@ func ContainerNetNSPath(ctx context.Context, c containerd.Container) (string, er
 		return "", fmt.Errorf("invalid target container: %s, should be running", c.ID())
 	}
 	return fmt.Sprintf("/proc/%d/ns/net", task.Pid()), nil
+}
+
+// UpdateStatusLabel updates the "containerd.io/restart.status"
+// label of the container according to the value of restart desired status.
+func UpdateStatusLabel(ctx context.Context, container containerd.Container, status containerd.ProcessStatus) error {
+	opt := containerd.WithAdditionalContainerLabels(map[string]string{
+		restart.StatusLabel: string(status),
+	})
+	return container.Update(ctx, containerd.UpdateContainerOpts(opt))
 }
 
 // UpdateExplicitlyStoppedLabel updates the "containerd.io/restart.explicitly-stopped"
@@ -197,7 +208,7 @@ func GenerateSharingPIDOpts(ctx context.Context, targetCon containerd.Container)
 }
 
 // Start starts `container` with `attach` flag. If `attach` is true, it will attach to the container's stdio.
-func Start(ctx context.Context, container containerd.Container, flagA bool, client *containerd.Client) (err error) {
+func Start(ctx context.Context, container containerd.Container, flagA bool, client *containerd.Client, detachKeys string) (err error) {
 	// defer the storage of start error in the dedicated label
 	defer func() {
 		if err != nil {
@@ -238,6 +249,14 @@ func Start(ctx context.Context, container containerd.Container, flagA bool, clie
 		logrus.Warnf("container %s is already running", container.ID())
 		return nil
 	}
+
+	_, restartPolicyExist := lab[restart.PolicyLabel]
+	if restartPolicyExist {
+		if err := UpdateStatusLabel(ctx, container, containerd.Running); err != nil {
+			return err
+		}
+	}
+
 	if err := UpdateExplicitlyStoppedLabel(ctx, container, false); err != nil {
 		return err
 	}
@@ -246,23 +265,15 @@ func Start(ctx context.Context, container containerd.Container, flagA bool, clie
 			logrus.WithError(err).Debug("failed to delete old task")
 		}
 	}
-	task, err := taskutil.NewTask(ctx, client, container, flagA, false, flagT, true, con, logURI)
+	detachC := make(chan struct{})
+	task, err := taskutil.NewTask(ctx, client, container, flagA, false, flagT, true, con, logURI, detachKeys, detachC)
 	if err != nil {
 		return err
-	}
-
-	var statusC <-chan containerd.ExitStatus
-	if flagA {
-		statusC, err = task.Wait(ctx)
-		if err != nil {
-			return err
-		}
 	}
 
 	if err := task.Start(ctx); err != nil {
 		return err
 	}
-
 	if !flagA {
 		return nil
 	}
@@ -271,16 +282,35 @@ func Start(ctx context.Context, container containerd.Container, flagA bool, clie
 			logrus.WithError(err).Error("console resize")
 		}
 	}
-
 	sigc := signalutil.ForwardAllSignals(ctx, task)
 	defer signalutil.StopCatch(sigc)
-	status := <-statusC
-	code, _, err := status.Result()
+
+	statusC, err := task.Wait(ctx)
 	if err != nil {
 		return err
 	}
-	if code != 0 {
-		return errutil.NewExitCoderErr(int(code))
+	select {
+	// io.Wait() would return when either 1) the user detaches from the container OR 2) the container is about to exit.
+	//
+	// If we replace the `select` block with io.Wait() and
+	// directly use task.Status() to check the status of the container after io.Wait() returns,
+	// it can still be running even though the container is about to exit (somehow especially for Windows).
+	//
+	// As a result, we need a separate detachC to distinguish from the 2 cases mentioned above.
+	case <-detachC:
+		io := task.IO()
+		if io == nil {
+			return errors.New("got a nil IO from the task")
+		}
+		io.Wait()
+	case status := <-statusC:
+		code, _, err := status.Result()
+		if err != nil {
+			return err
+		}
+		if code != 0 {
+			return errutil.NewExitCoderErr(int(code))
+		}
 	}
 	return nil
 }
@@ -468,4 +498,52 @@ func ContainerStateDirPath(ns, dataStore, id string) (string, error) {
 		return "", fmt.Errorf("invalid namespace name %q for determining state dir of container %q: %s", ns, id, err)
 	}
 	return filepath.Join(dataStore, "containers", ns, id), nil
+}
+
+// ContainerVolume is a struct representing a volume in a container.
+type ContainerVolume struct {
+	Type        string
+	Name        string
+	Source      string
+	Destination string
+	Mode        string
+	RW          bool
+	Propagation string
+}
+
+// GetContainerVolumes is a function that returns a slice of containerVolume pointers.
+// It accepts a map of container labels as input, where key is the label name and value is its associated value.
+// The function iterates over the predefined volume labels (AnonymousVolumes and Mounts)
+// and for each, it checks if the labels exists in the provided container labels.
+// If yes, it decodes the label value from JSON format and appends the volumes to the result.
+// In case of error during decoding, it logs the error and continues to the next label.
+func GetContainerVolumes(containerLabels map[string]string) []*ContainerVolume {
+	var vols []*ContainerVolume
+	volLabels := []string{labels.AnonymousVolumes, labels.Mounts}
+	for _, volLabel := range volLabels {
+		names, ok := containerLabels[volLabel]
+		if !ok {
+			continue
+		}
+		var (
+			volumes []*ContainerVolume
+			err     error
+		)
+		if volLabel == labels.Mounts {
+			err = json.Unmarshal([]byte(names), &volumes)
+		}
+		if volLabel == labels.AnonymousVolumes {
+			var anonymous []string
+			err = json.Unmarshal([]byte(names), &anonymous)
+			for _, anony := range anonymous {
+				volumes = append(volumes, &ContainerVolume{Name: anony})
+			}
+
+		}
+		if err != nil {
+			logrus.Warn(err)
+		}
+		vols = append(vols, volumes...)
+	}
+	return vols
 }
