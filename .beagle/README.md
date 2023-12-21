@@ -32,6 +32,8 @@ docker run -it \
 registry.cn-qingdao.aliyuncs.com/wod/golang:1.21 \
 bash .beagle/build.sh
 
+git apply -R .beagle/0001-support-loong64.patch
+
 # check
 file _output/linux/loong64/nerdctl
 ```
