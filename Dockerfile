@@ -18,40 +18,40 @@
 # TODO: verify commit hash
 
 # Basic deps
-ARG CONTAINERD_VERSION=v1.7.3
-ARG RUNC_VERSION=v1.1.8
-ARG CNI_PLUGINS_VERSION=v1.3.0
+ARG CONTAINERD_VERSION=v1.7.11
+ARG RUNC_VERSION=v1.1.10
+ARG CNI_PLUGINS_VERSION=v1.4.0
 
 # Extra deps: Build
-ARG BUILDKIT_VERSION=v0.12.0
+ARG BUILDKIT_VERSION=v0.12.4
 # Extra deps: Lazy-pulling
-ARG STARGZ_SNAPSHOTTER_VERSION=v0.14.3
+ARG STARGZ_SNAPSHOTTER_VERSION=v0.15.1
 # Extra deps: Encryption
-ARG IMGCRYPT_VERSION=v1.1.7
+ARG IMGCRYPT_VERSION=v1.1.9
 # Extra deps: Rootless
-ARG ROOTLESSKIT_VERSION=v1.1.0
-ARG SLIRP4NETNS_VERSION=v1.2.0
+ARG ROOTLESSKIT_VERSION=v1.1.1
+ARG SLIRP4NETNS_VERSION=v1.2.2
 # Extra deps: bypass4netns
 ARG BYPASS4NETNS_VERSION=v0.3.0
 # Extra deps: FUSE-OverlayFS
-ARG FUSE_OVERLAYFS_VERSION=v1.12
-ARG CONTAINERD_FUSE_OVERLAYFS_VERSION=v1.0.6
+ARG FUSE_OVERLAYFS_VERSION=v1.13
+ARG CONTAINERD_FUSE_OVERLAYFS_VERSION=v1.0.8
 # Extra deps: IPFS
-ARG KUBO_VERSION=v0.21.0
+ARG KUBO_VERSION=v0.24.0
 # Extra deps: Init
 ARG TINI_VERSION=v0.19.0
 # Extra deps: Debug
 ARG BUILDG_VERSION=v0.4.1
 
 # Test deps
-ARG GO_VERSION=1.20
+ARG GO_VERSION=1.21
 ARG UBUNTU_VERSION=22.04
 ARG CONTAINERIZED_SYSTEMD_VERSION=v0.1.1
-ARG GOTESTSUM_VERSION=v1.10.1
-ARG NYDUS_VERSION=v2.2.2
-ARG SOCI_SNAPSHOTTER_VERSION=0.3.0
+ARG GOTESTSUM_VERSION=v1.11.0
+ARG NYDUS_VERSION=v2.2.4
+ARG SOCI_SNAPSHOTTER_VERSION=0.4.0
 
-FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.2.1 AS xx
+FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.3.0 AS xx
 
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bullseye AS build-base-debian
@@ -73,10 +73,7 @@ WORKDIR /go/src/github.com/containerd/containerd
 RUN git checkout ${CONTAINERD_VERSION} && \
   mkdir -p /out /out/$TARGETARCH && \
   cp -a containerd.service /out
-ENV CGO_ENABLED=1
-ENV GO111MODULE=off
-# TODO: how to build containerd as static binaries? https://github.com/containerd/containerd/issues/6158
-RUN GO=xx-go make && \
+RUN GO=xx-go make STATIC=1 && \
   cp -a bin/containerd bin/containerd-shim-runc-v2 bin/ctr /out/$TARGETARCH
 
 FROM build-base-debian AS build-runc
@@ -100,6 +97,18 @@ RUN git checkout ${BYPASS4NETNS_VERSION} && \
 ENV CGO_ENABLED=1
 RUN GO=xx-go make static && \
   xx-verify --static bypass4netns && cp -a bypass4netns bypass4netnsd /out/${TARGETARCH}
+
+FROM build-base-debian AS build-kubo
+ARG KUBO_VERSION
+ARG TARGETARCH
+RUN git clone https://github.com/ipfs/kubo.git /go/src/github.com/ipfs/kubo
+WORKDIR /go/src/github.com/ipfs/kubo
+RUN git checkout ${KUBO_VERSION} && \
+  mkdir -p /out/${TARGETARCH}
+ENV CGO_ENABLED=0
+RUN xx-go --wrap && \
+  make build && \
+  xx-verify --static cmd/ipfs/ipfs && cp -a cmd/ipfs/ipfs /out/${TARGETARCH}
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build-base
 RUN apk add --no-cache make git curl
@@ -163,6 +172,7 @@ RUN fname="stargz-snapshotter-${STARGZ_SNAPSHOTTER_VERSION}-${TARGETOS:-linux}-$
 ARG IMGCRYPT_VERSION
 RUN git clone https://github.com/containerd/imgcrypt.git /go/src/github.com/containerd/imgcrypt && \
   cd /go/src/github.com/containerd/imgcrypt && \
+  git checkout "${IMGCRYPT_VERSION}" && \
   CGO_ENABLED=0 make && DESTDIR=/out make install && \
   echo "- imgcrypt: ${IMGCRYPT_VERSION}" >> /out/share/doc/nerdctl-full/README.md
 ARG ROOTLESSKIT_VERSION
@@ -197,13 +207,8 @@ RUN fname="containerd-fuse-overlayfs-${CONTAINERD_FUSE_OVERLAYFS_VERSION/v}-${TA
   rm -f "${fname}" && \
   echo "- containerd-fuse-overlayfs: ${CONTAINERD_FUSE_OVERLAYFS_VERSION}" >> /out/share/doc/nerdctl-full/README.md
 ARG KUBO_VERSION
-RUN fname="kubo_${KUBO_VERSION}_${TARGETOS:-linux}-${TARGETARCH:-amd64}.tar.gz" && \
-  curl -o "${fname}" -fSL "https://github.com/ipfs/kubo/releases/download/${KUBO_VERSION}/${fname}" && \
-  grep "${fname}" "/SHA256SUMS.d/kubo-${KUBO_VERSION}" | sha256sum -c && \
-  tmpout=$(mktemp -d) && \
-  tar -C ${tmpout} -xzf "${fname}" kubo/ipfs && \
-  mv ${tmpout}/kubo/ipfs /out/bin/ && \
-  echo "- Kubo (IPFS): ${KUBO_VERSION}" >> /out/share/doc/nerdctl-full/README.md
+COPY --from=build-kubo /out/${TARGETARCH:-amd64}/* /out/bin/
+RUN echo "- Kubo (IPFS): ${KUBO_VERSION}" >> /out/share/doc/nerdctl-full/README.md
 ARG TINI_VERSION
 RUN fname="tini-static-${TARGETARCH:-amd64}" && \
   curl -o "${fname}" -fSL "https://github.com/krallin/tini/releases/download/${TINI_VERSION}/${fname}" && \
@@ -340,5 +345,9 @@ CMD ["/test-integration-rootless.sh", \
 FROM test-integration-rootless AS test-integration-rootless-port-slirp4netns
 COPY ./Dockerfile.d/home_rootless_.config_systemd_user_containerd.service.d_port-slirp4netns.conf /home/rootless/.config/systemd/user/containerd.service.d/port-slirp4netns.conf
 RUN chown -R rootless:rootless /home/rootless/.config
+
+FROM test-integration AS test-integration-ipv6
+CMD ["gotestsum", "--format=testname", "--rerun-fails=2", "--packages=github.com/containerd/nerdctl/cmd/nerdctl/...", \
+  "--", "-timeout=30m", "-args", "-test.kill-daemon", "-test.ipv6"]
 
 FROM base AS demo

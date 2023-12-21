@@ -29,12 +29,12 @@ import (
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/pkg/progress"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/clientutil"
 	"github.com/containerd/nerdctl/pkg/formatter"
 	"github.com/containerd/nerdctl/pkg/idutil/imagewalker"
 	"github.com/containerd/nerdctl/pkg/imgutil"
 	"github.com/opencontainers/image-spec/identity"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -198,7 +198,7 @@ func printHistory(cmd *cobra.Command, historys []historyPrintable) error {
 
 	for index := len(historys) - 1; index >= 0; index-- {
 		if err := printer.printHistory(historys[index]); err != nil {
-			logrus.Warn(err)
+			log.L.Warn(err)
 		}
 	}
 
@@ -223,7 +223,7 @@ func (x *historyPrinter) printHistory(p historyPrintable) error {
 			return err
 		}
 	} else if x.quiet {
-		if _, err := fmt.Fprintf(x.w, "%s\n", p.Snapshot); err != nil {
+		if _, err := fmt.Fprintln(x.w, p.Snapshot); err != nil {
 			return err
 		}
 	} else {

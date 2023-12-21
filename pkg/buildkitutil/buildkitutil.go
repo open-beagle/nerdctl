@@ -35,9 +35,8 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/rootlessutil"
-	"github.com/hashicorp/go-multierror"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -66,7 +65,7 @@ func GetBuildkitHost(namespace string) (string, error) {
 		var err error
 		run, err = rootlessutil.XDGRuntimeDir()
 		if err != nil {
-			logrus.Warn(err)
+			log.L.Warn(err)
 			run = fmt.Sprintf("/run/user/%d", rootlessutil.ParentEUID())
 		}
 	}
@@ -75,18 +74,19 @@ func GetBuildkitHost(namespace string) (string, error) {
 		hostRel = append(hostRel, fmt.Sprintf("buildkit-%s/buildkitd.sock", namespace))
 	}
 	hostRel = append(hostRel, "buildkit-default/buildkitd.sock", "buildkit/buildkitd.sock")
-	var allErr error
+	var errs []error //nolint:prealloc
 	for _, p := range hostRel {
-		logrus.Debugf("Choosing the buildkit host %q, candidates=%v (in %q)", p, hostRel, run)
+		log.L.Debugf("Choosing the buildkit host %q, candidates=%v (in %q)", p, hostRel, run)
 		buildkitHost := "unix://" + filepath.Join(run, p)
 		_, err := pingBKDaemon(buildkitHost)
 		if err == nil {
-			logrus.Debugf("Chosen buildkit host %q", buildkitHost)
+			log.L.Debugf("Chosen buildkit host %q", buildkitHost)
 			return buildkitHost, nil
 		}
-		allErr = multierror.Append(allErr, fmt.Errorf("failed to ping to host %s: %w", buildkitHost, err))
+		errs = append(errs, fmt.Errorf("failed to ping to host %s: %w", buildkitHost, err))
 	}
-	logrus.WithError(allErr).Error(getHint())
+	allErr := errors.Join(errs...)
+	log.L.WithError(allErr).Error(getHint())
 	return "", fmt.Errorf("no buildkit host is available, tried %d candidates: %w", len(hostRel), allErr)
 }
 
@@ -136,7 +136,7 @@ func getHint() string {
 func PingBKDaemon(buildkitHost string) error {
 	if out, err := pingBKDaemon(buildkitHost); err != nil {
 		if out != "" {
-			logrus.Error(out)
+			log.L.Error(out)
 		}
 		return fmt.Errorf(getHint()+": %w", err)
 	}
@@ -144,8 +144,8 @@ func PingBKDaemon(buildkitHost string) error {
 }
 
 func pingBKDaemon(buildkitHost string) (output string, _ error) {
-	if runtime.GOOS != "linux" {
-		return "", errors.New("only linux is supported")
+	if runtime.GOOS != "linux" && runtime.GOOS != "freebsd" {
+		return "", errors.New("only linux and freebsd are supported")
 	}
 	buildctlBinary, err := BuildctlBinary()
 	if err != nil {
@@ -185,7 +185,7 @@ func WriteTempDockerfile(rc io.Reader) (dockerfileDir string, err error) {
 	return dockerfileDir, nil
 }
 
-// Buildkit file returns the values for the following buildctl args
+// BuildKitFile returns the values for the following buildctl args
 // --localfilename=dockerfile={absDir}
 // --opt=filename={file}
 func BuildKitFile(dir, inputfile string) (absDir string, file string, err error) {
@@ -215,7 +215,7 @@ func BuildKitFile(dir, inputfile string) (absDir string, file string, err error)
 				return "", "", err
 			}
 			if !bytes.Equal(dockerfile, containerfile) {
-				logrus.Warnf("%s and %s have different contents, building with %s", DefaultDockerfileName, ContainerfileName, DefaultDockerfileName)
+				log.L.Warnf("%s and %s have different contents, building with %s", DefaultDockerfileName, ContainerfileName, DefaultDockerfileName)
 			}
 		}
 		if dErr != nil {

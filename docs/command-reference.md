@@ -31,7 +31,9 @@ It does not necessarily mean that the corresponding features are missing in cont
   - [:whale: nerdctl pause](#whale-nerdctl-pause)
   - [:whale: nerdctl unpause](#whale-nerdctl-unpause)
   - [:whale: nerdctl rename](#whale-nerdctl-rename)
+  - [:whale: nerdctl attach](#whale-nerdctl-attach)
   - [:whale: nerdctl container prune](#whale-nerdctl-container-prune)
+  - [:whale: nerdctl diff](#whale-nerdctl-diff)
 - [Build](#build)
   - [:whale: nerdctl build](#whale-nerdctl-build)
   - [:whale: nerdctl commit](#whale-nerdctl-commit)
@@ -109,6 +111,7 @@ It does not necessarily mean that the corresponding features are missing in cont
   - [:whale: nerdctl compose pause](#whale-nerdctl-compose-pause)
   - [:whale: nerdctl compose unpause](#whale-nerdctl-compose-unpause)
   - [:whale: nerdctl compose config](#whale-nerdctl-compose-config)
+  - [:whale: nerdctl compose cp](#whale-nerdctl-compose-cp)
   - [:whale: nerdctl compose kill](#whale-nerdctl-compose-kill)
   - [:whale: nerdctl compose restart](#whale-nerdctl-compose-restart)
   - [:whale: nerdctl compose rm](#whale-nerdctl-compose-rm)
@@ -181,6 +184,7 @@ Network flags:
 - :whale: `--add-host`: Add a custom host-to-IP mapping (host:ip). `ip` could be a special string `host-gateway`,
 - which will be resolved to the `host-gateway-ip` in nerdctl.toml or global flag.
 - :whale: `--ip`: Specific static IP address(es) to use
+- :whale: `--ip6`: Specific static IP6 address(es) to use. Should be used with user networks
 - :whale: `--mac-address`: Specific MAC address to use. Be aware that it does not
   check if manually specified MAC addresses are unique. Supports network
   type `bridge` and `macvlan`
@@ -373,7 +377,7 @@ IPFS flags:
 
 Unimplemented `docker run` flags:
     `--attach`, `--blkio-weight-device`, `--cpu-rt-*`, `--device-*`,
-    `--disable-content-trust`, `--domainname`, `--expose`, `--health-*`, `--ip6`, `--isolation`, `--no-healthcheck`,
+    `--disable-content-trust`, `--domainname`, `--expose`, `--health-*`, `--isolation`, `--no-healthcheck`,
     `--link*`, `--mac-address`, `--publish-all`, `--sig-proxy`, `--storage-opt`,
     `--userns`, `--volume-driver`
 
@@ -609,6 +613,30 @@ Rename a container.
 
 Usage: `nerdctl rename CONTAINER NEW_NAME`
 
+### :whale: nerdctl attach
+
+Attach stdin, stdout, and stderr to a running container. For example:
+
+1. `nerdctl run -it --name test busybox` to start a container with a pty
+2. `ctrl-p ctrl-q` to detach from the container
+3. `nerdctl attach test` to attach to the container
+
+Caveats:
+
+- Currently only one attach session is allowed. When the second session tries to attach, currently no error will be returned from nerdctl.
+  However, since behind the scenes, there's only one FIFO for stdin, stdout, and stderr respectively,
+  if there are multiple sessions, all the sessions will be reading from and writing to the same 3 FIFOs, which will result in mixed input and partial output.
+- Until dual logging (issue #1946) is implemented,
+  a container that is spun up by either `nerdctl run -d` or `nerdctl start` (without `--attach`) cannot be attached to.
+
+Usage: `nerdctl attach CONTAINER`
+
+Flags:
+
+- :whale: `--detach-keys`: Override the default detach keys
+
+Unimplemented `docker attach` flags: `--no-stdin`, `--sig-proxy`
+
 ### :whale: nerdctl container prune
 
 Remove all stopped containers.
@@ -620,6 +648,12 @@ Flags:
 - :whale: `-f, --force`: Do not prompt for confirmation.
 
 Unimplemented `docker container prune` flags: `--filter`
+
+### :whale: nerdctl diff
+
+Inspect changes to files or directories on a container's filesystem
+
+Usage: `nerdctl diff CONTAINER`
 
 ## Build
 
@@ -723,6 +757,7 @@ Flags:
 - :nerd_face: `--cosign-certificate-oidc-issuer`: The OIDC issuer expected in a valid Fulcio certificate for --verify=cosign,, e.g. https://token.actions.githubusercontent.com or https://oauth2.sigstore.dev/auth. Either --cosign-certificate-oidc-issuer or --cosign-certificate-oidc-issuer-regexp must be set for keyless flows
 - :nerd_face: `--cosign-certificate-oidc-issuer-regexp`: A regular expression alternative to --certificate-oidc-issuer for --verify=cosign,. Accepts the Go regular expression syntax described at https://golang.org/s/re2syntax. Either --cosign-certificate-oidc-issuer or --cosign-certificate-oidc-issuer-regexp must be set for keyless flows
 - :nerd_face: `--ipfs-address`: Multiaddr of IPFS API (default uses `$IPFS_PATH` env variable if defined or local directory `~/.ipfs`)
+- :nerd_face: `--soci-index-digest`: Specify a particular index digest for SOCI. If left empty, SOCI will automatically use the index determined by the selection policy.
 
 Unimplemented `docker pull` flags: `--all-tags`, `--disable-content-trust` (default true)
 
@@ -743,8 +778,11 @@ Flags:
 - :nerd_face: `--notation-key-name`: Signing key name for a key previously added to notation's key list for `--sign=notation`
 - :nerd_face: `--allow-nondistributable-artifacts`: Allow pushing images with non-distributable blobs
 - :nerd_face: `--ipfs-address`: Multiaddr of IPFS API (default uses `$IPFS_PATH` env variable if defined or local directory `~/.ipfs`)
+- :whale: `-q, --quiet`: Suppress verbose output
+- :nerd_face: `--soci-span-size`: Span size in bytes that soci index uses to segment layer data. Default is 4 MiB.
+- :nerd_face: `--soci-min-layer-size`: Minimum layer size in bytes to build zTOC for. Smaller layers won't have zTOC and not lazy pulled. Default is 10 MiB.
 
-Unimplemented `docker push` flags: `--all-tags`, `--disable-content-trust` (default true), `--quiet`
+Unimplemented `docker push` flags: `--all-tags`, `--disable-content-trust` (default true)
 
 ### :whale: nerdctl load
 
@@ -849,6 +887,8 @@ Flags:
 - `--estargz-min-chunk-size=<SIZE>` : The minimal number of bytes of data must be written in one gzip stream (requires stargz-snapshotter >= v0.13.0). Useful for creating a smaller eStargz image (refer to [`./stargz.md`](./stargz.md) for details).
 - `--estargz-external-toc` : Separate TOC JSON into another image (called \"TOC image\"). The name of TOC image is the original + \"-esgztoc\" suffix. Both eStargz and the TOC image should be pushed to the same registry. (requires stargz-snapshotter >= v0.13.0) Useful for creating a smaller eStargz image (refer to [`./stargz.md`](./stargz.md) for details). :warning: This flag is experimental and subject to change.
 - `--estargz-keep-diff-id`: Convert to esgz without changing diffID (cannot be used in conjunction with '--estargz-record-in'. must be specified with '--estargz-external-toc')
+- `--zstd`                             : Use zstd compression instead of gzip. Should be used in conjunction with '--oci'
+- `--zstd-compression-level=<LEVEL>`   : zstd compression level (default: 3)
 - `--zstdchunked`                      : Use zstd compression instead of gzip (a.k.a zstd:chunked). Should be used in conjunction with '--oci'
 - `--zstdchunked-record-in=<FILE>` : read `ctr-remote optimize --record-out=<FILE>` record file. :warning: This flag is experimental and subject to change.
 - `--zstdchunked-compression-level=<LEVEL>`: zstd:chunked compression level (default: 3)
@@ -961,8 +1001,9 @@ Flags:
 - :whale: `--gateway`: Gateway for the master subnet
 - :whale: `--ip-range`: Allocate container ip from a sub-range
 - :whale: `--label`: Set metadata on a network
+- :whale: `--ipv6`: Enable IPv6. Should be used with a valid subnet.
 
-Unimplemented `docker network create` flags: `--attachable`, `--aux-address`, `--config-from`, `--config-only`, `--ingress`, `--internal`, `--ipv6`, `--scope`
+Unimplemented `docker network create` flags: `--attachable`, `--aux-address`, `--config-from`, `--config-only`, `--ingress`, `--internal`, `--scope`
 
 ### :whale: nerdctl network ls
 
@@ -979,7 +1020,7 @@ Flags:
   - :nerd_face: `--format=wide`: Alias of `--format=table`
   - :nerd_face: `--format=json`: Alias of `--format='{{json .}}'`
 
-Unimplemented `docker network ls` flags: `--filter`, `--no-trunc`
+Unimplemented `docker network ls` flags: `--no-trunc`
 
 ### :whale: nerdctl network inspect
 
@@ -1401,10 +1442,9 @@ Flags:
 - :whale: `-i, --interactive`: Keep STDIN open even if not attached (default true)
 - :whale: `--privileged`: Give extended privileges to the command
 - :whale: `-t, --tty`: Allocate a pseudo-TTY
+- :whale: `-T, --no-TTY`: Disable pseudo-TTY allocation. By default nerdctl compose exec allocates a TTY.
 - :whale: `-u, --user`: Username or UID (format: `<name|uid>[:<group|gid>]`)
 - :whale: `-w, --workdir`: Working directory inside the container
-
-Unimplemented `docker-compose exec` (V2) flags:  `-T, --no-TTY`
 
 ### :whale: nerdctl compose down
 
@@ -1462,9 +1502,17 @@ List containers of services
 
 Usage: `nerdctl compose ps [OPTIONS] [SERVICE...]`
 
-Unimplemented `docker-compose ps` (V1) flags: `--quiet`, `--services`, `--filter`, `--all`
-
-Unimplemented `docker compose ps` (V2) flags: `--status`
+- :whale: `-a, --all`: Show all containers (default shows just running)
+- :whale: `-q, --quiet`: Only display container IDs
+- :whale: `--format`: Format the output
+  - :whale: `--format=table` (default): Table
+  - :whale: `--format=json'`: JSON
+- :whale: `-f, --filter`: Filter containers based on given conditions
+  - :whale: `--filter status=<value>`: One of `created, running, paused,
+    restarting, exited, pausing, unknown`. Note that `removing, dead` are
+    not supported and will be ignored
+- :whale: `--services`: Print the service names, one per line
+- :whale: `--status`: Filter containers by status. Values: [paused | restarting | running | created | exited | pausing | unknown]
 
 ### :whale: nerdctl compose pull
 
@@ -1514,6 +1562,23 @@ Flags:
 Unimplemented `docker-compose config` (V1) flags: `--resolve-image-digests`, `--no-interpolate`
 
 Unimplemented `docker compose config` (V2) flags: `--resolve-image-digests`, `--no-interpolate`, `--format`, `--output`, `--profiles`
+
+### :whale: nerdctl compose cp
+
+Copy files/folders between a service container and the local filesystem
+
+Usage:
+```
+nerdctl compose cp [OPTIONS] SERVICE:SRC_PATH DEST_PATH|-
+nerdctl compose cp [OPTIONS] SRC_PATH|- SERVICE:DEST_PATH [flags]
+```
+
+Flags:
+- :whale: `--dry-run`: Execute command in dry run mode
+- :whale: `-L, --follow-link`: Always follow symbol link in SRC_PATH
+- :whale: `--index int`: index of the container if service has multiple replicas
+
+Unimplemented `docker compose cp` flags: `--archive`
 
 ### :whale: nerdctl compose kill
 
@@ -1620,7 +1685,6 @@ See [`./config.md`](./config.md).
 
 Container management:
 
-- `docker attach`
 - `docker diff`
 - `docker checkpoint *`
 

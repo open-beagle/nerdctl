@@ -28,12 +28,12 @@ import (
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/pkg/progress"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/api/types"
 	"github.com/containerd/nerdctl/pkg/formatter"
 	"github.com/containerd/nerdctl/pkg/imgutil"
 	"github.com/containerd/nerdctl/pkg/labels"
 	"github.com/containerd/nerdctl/pkg/labels/k8slabels"
-	"github.com/sirupsen/logrus"
 )
 
 // List prints containers according to `options`.
@@ -92,7 +92,7 @@ type ListItem struct {
 	ID        string
 	Image     string
 	Platform  string // nerdctl extension
-	Names     []string
+	Names     string
 	Ports     string
 	Status    string
 	Runtime   string // nerdctl extension
@@ -101,13 +101,17 @@ type ListItem struct {
 	// TODO: "LocalVolumes", "Mounts", "Networks", "RunningFor", "State"
 }
 
+func (x *ListItem) Label(s string) string {
+	return x.Labels[s]
+}
+
 func prepareContainers(ctx context.Context, client *containerd.Client, containers []containerd.Container, options types.ContainerListOptions) ([]ListItem, error) {
 	listItems := make([]ListItem, len(containers))
 	for i, c := range containers {
 		info, err := c.Info(ctx, containerd.WithoutRefreshedMetadata)
 		if err != nil {
 			if errdefs.IsNotFound(err) {
-				logrus.Warn(err)
+				log.G(ctx).Warn(err)
 				continue
 			}
 			return nil, err
@@ -115,7 +119,7 @@ func prepareContainers(ctx context.Context, client *containerd.Client, container
 		spec, err := c.Spec(ctx)
 		if err != nil {
 			if errdefs.IsNotFound(err) {
-				logrus.Warn(err)
+				log.G(ctx).Warn(err)
 				continue
 			}
 			return nil, err
@@ -130,7 +134,7 @@ func prepareContainers(ctx context.Context, client *containerd.Client, container
 			ID:        id,
 			Image:     info.Image,
 			Platform:  info.Labels[labels.Platform],
-			Names:     []string{getContainerName(info.Labels)},
+			Names:     getContainerName(info.Labels),
 			Ports:     formatter.FormatPorts(info.Labels),
 			Status:    formatter.ContainerStatus(ctx, c),
 			Runtime:   info.Runtime.Name,
@@ -170,7 +174,7 @@ func getContainerNetworks(containerLables map[string]string) []string {
 	var networks []string
 	if names, ok := containerLables[labels.Networks]; ok {
 		if err := json.Unmarshal([]byte(names), &networks); err != nil {
-			logrus.Warn(err)
+			log.L.Warn(err)
 		}
 	}
 	return networks

@@ -35,6 +35,7 @@ import (
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/oci"
 	gocni "github.com/containerd/go-cni"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/api/types"
 	"github.com/containerd/nerdctl/pkg/clientutil"
 	"github.com/containerd/nerdctl/pkg/cmd/image"
@@ -53,7 +54,6 @@ import (
 	dockercliopts "github.com/docker/cli/opts"
 	dockeropts "github.com/docker/docker/opts"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/sirupsen/logrus"
 )
 
 // Create will create a container.
@@ -193,6 +193,7 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 	internalLabels.hostname = netLabelOpts.Hostname
 	internalLabels.ports = netLabelOpts.PortMappings
 	internalLabels.ipAddress = netLabelOpts.IPAddress
+	internalLabels.ip6Address = netLabelOpts.IP6Address
 	internalLabels.networks = netLabelOpts.NetworkSlice
 	internalLabels.macAddress = netLabelOpts.MACAddress
 
@@ -294,7 +295,7 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 	// perform network setup/teardown in the main nerdctl executable.
 	if containerErr == nil && runtime.GOOS == "windows" {
 		netSetupErr = netManager.SetupNetworking(ctx, id)
-		logrus.WithError(netSetupErr).Warnf("networking setup error has occurred")
+		log.G(ctx).WithError(netSetupErr).Warnf("networking setup error has occurred")
 	}
 
 	if containerErr != nil || netSetupErr != nil {
@@ -485,7 +486,7 @@ func withStop(stopSignal string, stopTimeout int, ensuredImage *imgutil.EnsuredI
 		}
 		c.Labels[containerd.StopSignalLabel] = stopSignal
 		if stopTimeout != 0 {
-			c.Labels[labels.StopTimout] = strconv.Itoa(stopTimeout)
+			c.Labels[labels.StopTimeout] = strconv.Itoa(stopTimeout)
 		}
 		return nil
 	}
@@ -505,6 +506,7 @@ type internalLabels struct {
 	// network
 	networks   []string
 	ipAddress  string
+	ip6Address string
 	ports      []gocni.PortMapping
 	macAddress string
 	// volume
@@ -559,6 +561,10 @@ func withInternalLabels(internalLabels internalLabels) (containerd.NewContainerO
 
 	if internalLabels.ipAddress != "" {
 		m[labels.IPAddress] = internalLabels.ipAddress
+	}
+
+	if internalLabels.ip6Address != "" {
+		m[labels.IP6Address] = internalLabels.ip6Address
 	}
 
 	m[labels.Platform], err = platformutil.NormalizeString(internalLabels.platform)
@@ -636,7 +642,8 @@ func propagateContainerdLabelsToOCIAnnotations() oci.SpecOpts {
 }
 
 func writeCIDFile(path, id string) error {
-	if _, err := os.Stat(path); err == nil {
+	_, err := os.Stat(path)
+	if err == nil {
 		return fmt.Errorf("container ID file found, make sure the other container isn't running or delete %s", path)
 	} else if errors.Is(err, os.ErrNotExist) {
 		f, err := os.Create(path)
@@ -649,9 +656,8 @@ func writeCIDFile(path, id string) error {
 			return err
 		}
 		return nil
-	} else {
-		return err
 	}
+	return err
 }
 
 // generateLogConfig creates a LogConfig for the current container store
@@ -693,7 +699,7 @@ func generateLogConfig(dataStore string, id string, logDriver string, logOpt []s
 			return
 		}
 		if lu != nil {
-			logrus.Debugf("generated log driver: %s", lu.String())
+			log.L.Debugf("generated log driver: %s", lu.String())
 			logConfig.LogURI = lu.String()
 		}
 	}
@@ -705,21 +711,21 @@ func generateGcFunc(ctx context.Context, container containerd.Container, ns, id,
 		if containerErr == nil {
 			netGcErr := netManager.CleanupNetworking(ctx, container)
 			if netGcErr != nil {
-				logrus.WithError(netGcErr).Warnf("failed to revert container %q networking settings", id)
+				log.G(ctx).WithError(netGcErr).Warnf("failed to revert container %q networking settings", id)
 			}
 		}
 
 		if rmErr := os.RemoveAll(internalLabels.stateDir); rmErr != nil {
-			logrus.WithError(rmErr).Warnf("failed to remove container %q state dir %q", id, internalLabels.stateDir)
+			log.G(ctx).WithError(rmErr).Warnf("failed to remove container %q state dir %q", id, internalLabels.stateDir)
 		}
 
 		if name != "" {
 			var errE error
 			if containerNameStore, errE = namestore.New(dataStore, ns); errE != nil {
-				logrus.WithError(errE).Warnf("failed to instantiate container name store during cleanup for container %q", id)
+				log.G(ctx).WithError(errE).Warnf("failed to instantiate container name store during cleanup for container %q", id)
 			}
 			if errE = containerNameStore.Release(name, id); errE != nil {
-				logrus.WithError(errE).Warnf("failed to release container name store for container %q (%s)", name, id)
+				log.G(ctx).WithError(errE).Warnf("failed to release container name store for container %q (%s)", name, id)
 			}
 		}
 	}

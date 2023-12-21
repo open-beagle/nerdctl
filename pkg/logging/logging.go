@@ -30,7 +30,7 @@ import (
 
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/runtime/v2/logging"
-	"github.com/sirupsen/logrus"
+	"github.com/containerd/log"
 )
 
 const (
@@ -50,10 +50,10 @@ type Driver interface {
 }
 
 type DriverFactory func(map[string]string) (Driver, error)
-type LogOpsValidateFunc func(logOptMap map[string]string) error
+type LogOptsValidateFunc func(logOptMap map[string]string) error
 
 var drivers = make(map[string]DriverFactory)
-var driversLogOptsValidateFunctions = make(map[string]LogOpsValidateFunc)
+var driversLogOptsValidateFunctions = make(map[string]LogOptsValidateFunc)
 
 func ValidateLogOpts(logDriver string, logOpts map[string]string) error {
 	if value, ok := driversLogOptsValidateFunctions[logDriver]; ok && value != nil {
@@ -62,7 +62,7 @@ func ValidateLogOpts(logDriver string, logOpts map[string]string) error {
 	return nil
 }
 
-func RegisterDriver(name string, f DriverFactory, validateFunc LogOpsValidateFunc) {
+func RegisterDriver(name string, f DriverFactory, validateFunc LogOptsValidateFunc) {
 	drivers[name] = f
 	driversLogOptsValidateFunctions[name] = validateFunc
 }
@@ -154,7 +154,7 @@ func loggingProcessAdapter(driver Driver, dataStore string, config *logging.Conf
 		scanner := bufio.NewScanner(reader)
 		for scanner.Scan() {
 			if scanner.Err() != nil {
-				logrus.Errorf("failed to read log: %v", scanner.Err())
+				log.L.Errorf("failed to read log: %v", scanner.Err())
 				return
 			}
 			dataChan <- scanner.Text()

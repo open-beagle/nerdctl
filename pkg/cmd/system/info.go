@@ -25,6 +25,7 @@ import (
 	"text/template"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/api/types"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -37,7 +38,6 @@ import (
 	"github.com/containerd/nerdctl/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/pkg/strutil"
 	"github.com/docker/go-units"
-	"github.com/sirupsen/logrus"
 )
 
 func Info(ctx context.Context, client *containerd.Client, options types.SystemInfoOptions) error {
@@ -84,7 +84,7 @@ func Info(ctx context.Context, client *containerd.Client, options types.SystemIn
 		if err := tmpl.Execute(w, x); err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(w, "\n")
+		_, err = fmt.Fprintln(w)
 		return err
 	}
 
@@ -125,12 +125,12 @@ func prettyPrintInfoNative(w io.Writer, info *native.Info) error {
 	}
 	sorter := func(x []*introspection.Plugin) func(int, int) bool {
 		return func(i, j int) bool {
-			return x[i].Type+"."+x[j].ID < x[j].Type+"."+x[j].ID
+			return x[i].Type+"."+x[i].ID < x[j].Type+"."+x[j].ID
 		}
 	}
 	sort.Slice(enabledPlugins, sorter(enabledPlugins))
 	sort.Slice(disabledPlugins, sorter(disabledPlugins))
-	fmt.Fprintf(w, "containerd Plugins:\n")
+	fmt.Fprintln(w, "containerd Plugins:")
 	for _, f := range enabledPlugins {
 		fmt.Fprintf(w, " - %s.%s\n", f.Type, f.ID)
 	}
@@ -147,7 +147,7 @@ func prettyPrintInfoDockerCompat(stdout io.Writer, stderr io.Writer, info *docke
 	fmt.Fprintf(w, "Client:\n")
 	fmt.Fprintf(w, " Namespace:\t%s\n", globalOptions.Namespace)
 	fmt.Fprintf(w, " Debug Mode:\t%v\n", debug)
-	fmt.Fprintf(w, "\n")
+	fmt.Fprintln(w)
 	fmt.Fprintf(w, "Server:\n")
 	fmt.Fprintf(w, " Server Version: %s\n", info.ServerVersion)
 	// Storage Driver is not really Server concept for nerdctl, but mimics `docker info` output
@@ -162,12 +162,12 @@ func prettyPrintInfoDockerCompat(stdout io.Writer, stderr io.Writer, info *docke
 	for _, s := range info.SecurityOptions {
 		m, err := strutil.ParseCSVMap(s)
 		if err != nil {
-			logrus.WithError(err).Warnf("unparsable security option %q", s)
+			log.L.WithError(err).Warnf("unparsable security option %q", s)
 			continue
 		}
 		name := m["name"]
 		if name == "" {
-			logrus.Warnf("unparsable security option %q", s)
+			log.L.Warnf("unparsable security option %q", s)
 			continue
 		}
 		fmt.Fprintf(w, "  %s\n", name)

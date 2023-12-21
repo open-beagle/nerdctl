@@ -344,6 +344,13 @@ type ContainerCommitOptions struct {
 	Pause bool
 }
 
+// ContainerDiffOptions specifies options for `nerdctl (container) diff`.
+type ContainerDiffOptions struct {
+	Stdout io.Writer
+	// GOptions is the global options
+	GOptions GlobalCommandOptions
+}
+
 // ContainerLogsOptions specifies options for `nerdctl (container) logs`.
 type ContainerLogsOptions struct {
 	Stdout io.Writer
@@ -368,6 +375,18 @@ type ContainerWaitOptions struct {
 	Stdout io.Writer
 	// GOptions is the global options.
 	GOptions GlobalCommandOptions
+}
+
+// ContainerAttachOptions specifies options for `nerdctl (container) attach`.
+type ContainerAttachOptions struct {
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
+
+	// GOptions is the global options.
+	GOptions GlobalCommandOptions
+	// DetachKeys is the key sequences to detach from the container.
+	DetachKeys string
 }
 
 // ContainerExecOptions specifies options for `nerdctl (container) exec`

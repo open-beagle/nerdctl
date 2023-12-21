@@ -26,10 +26,11 @@ import (
 )
 
 func Create(options types.NetworkCreateOptions, stdout io.Writer) error {
-	if options.CreateOptions.Subnet == "" {
+	if len(options.CreateOptions.Subnets) == 0 {
 		if options.CreateOptions.Gateway != "" || options.CreateOptions.IPRange != "" {
 			return fmt.Errorf("cannot set gateway or ip-range without subnet, specify --subnet manually")
 		}
+		options.CreateOptions.Subnets = []string{""}
 	}
 
 	e, err := netutil.NewCNIEnv(options.GOptions.CNIPath, options.GOptions.CNINetConfPath)
@@ -43,6 +44,6 @@ func Create(options types.NetworkCreateOptions, stdout io.Writer) error {
 		}
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "%s\n", *net.NerdctlID)
+	_, err = fmt.Fprintln(stdout, *net.NerdctlID)
 	return err
 }

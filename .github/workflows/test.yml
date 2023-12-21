@@ -8,7 +8,7 @@ on:
   pull_request:
 
 env:
-  GO_VERSION: 1.20.x
+  GO_VERSION: 1.21.x
 
 jobs:
   project:
@@ -16,11 +16,11 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v3.5.3
+      - uses: actions/checkout@v4.1.1
         with:
           path: src/github.com/containerd/nerdctl
           fetch-depth: 100
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: src/github.com/containerd/nerdctl
@@ -37,18 +37,18 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v3.5.3
+      - uses: actions/checkout@v4.1.1
         with:
           fetch-depth: 1
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
           cache: true
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v3.6.0
+        uses: golangci/golangci-lint-action@v3.7.0
         with:
-          version: v1.53.3
+          version: v1.55.2
           args: --verbose
       - name: yamllint-lint
         run: yamllint .
@@ -57,10 +57,10 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v3.5.3
+      - uses: actions/checkout@v4.1.1
         with:
           fetch-depth: 1
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
@@ -77,18 +77,18 @@ jobs:
         # ubuntu-20.04: cgroup v1, ubuntu-22.04: cgroup v2
         include:
           - ubuntu: 20.04
-            containerd: v1.6.22
+            containerd: v1.6.26
           - ubuntu: 20.04
-            containerd: v1.7.3
+            containerd: v1.7.11
           - ubuntu: 22.04
-            containerd: v1.7.3
+            containerd: v1.7.11
           - ubuntu: 22.04
             containerd: main
     env:
       UBUNTU_VERSION: "${{ matrix.ubuntu }}"
       CONTAINERD_VERSION: "${{ matrix.containerd }}"
     steps:
-      - uses: actions/checkout@v3.5.3
+      - uses: actions/checkout@v4.1.1
         with:
           fetch-depth: 1
       - name: "Prepare integration test environment"
@@ -104,6 +104,50 @@ jobs:
       - name: "Run integration tests"
         run: docker run -t --rm --privileged test-integration
 
+  test-integration-ipv6:
+    runs-on: "ubuntu-${{ matrix.ubuntu }}"
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-20.04: cgroup v1, ubuntu-22.04: cgroup v2
+        include:
+          - ubuntu: 22.04
+            containerd: v1.7.11
+    env:
+      UBUNTU_VERSION: "${{ matrix.ubuntu }}"
+      CONTAINERD_VERSION: "${{ matrix.containerd }}"
+    steps:
+      - uses: actions/checkout@v4.1.1
+        with:
+          fetch-depth: 1
+      - name: Enable ipv4 and ipv6 forwarding
+        run: |
+          sudo sysctl -w net.ipv6.conf.all.forwarding=1
+          sudo sysctl -w net.ipv4.ip_forward=1
+      - name: Enable IPv6 for Docker
+        run: |
+          sudo mkdir -p /etc/docker
+          echo '{"ipv6": true, "fixed-cidr-v6": "2001:db8:1::/64", "experimental": true, "ip6tables": true}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+      - name: "Prepare integration test environment"
+        run: DOCKER_BUILDKIT=1 docker build -t test-integration-ipv6 --target test-integration-ipv6 --build-arg UBUNTU_VERSION=${UBUNTU_VERSION} --build-arg CONTAINERD_VERSION=${CONTAINERD_VERSION} .
+      - name: "Remove snap loopback devices (conflicts with our loopback devices in TestRunDevice)"
+        run: |
+          sudo systemctl disable --now snapd.service snapd.socket
+          sudo apt-get purge -y snapd
+          sudo losetup -Dv
+          sudo losetup -lv
+      - name: "Register QEMU (tonistiigi/binfmt)"
+        run: docker run --privileged --rm tonistiigi/binfmt --install all
+      - name: "Run integration tests"
+        # The nested IPv6 network inside docker and qemu is complex and needs a bunch of sysctl config.
+        # Therefore it's hard to debug why the IPv6 tests fail in such an isolation layer.
+        # On the other side, using the host network is easier at configuration.
+        # Besides, each job is running on a different instance, which means using host network here
+        # is safe and has no side effects on others.
+        run: docker run --network host -t --rm --privileged test-integration-ipv6
+
   test-integration-rootless:
     runs-on: "ubuntu-${{ matrix.ubuntu }}"
     timeout-minutes: 60
@@ -113,25 +157,25 @@ jobs:
         # ubuntu-22.04: cgroup v1, ubuntu-22.04: cgroup v2
         include:
           - ubuntu: 20.04
-            containerd: v1.6.22
+            containerd: v1.6.26
             target: test-integration-rootless
           - ubuntu: 20.04
-            containerd: v1.7.3
+            containerd: v1.7.11
             target: test-integration-rootless
           - ubuntu: 22.04
-            containerd: v1.7.3
+            containerd: v1.7.11
             target: test-integration-rootless
           - ubuntu: 22.04
             containerd: main
             target: test-integration-rootless
           - ubuntu: 20.04
-            containerd: v1.6.22
+            containerd: v1.6.26
             target: test-integration-rootless-port-slirp4netns
           - ubuntu: 20.04
-            containerd: v1.7.3
+            containerd: v1.7.11
             target: test-integration-rootless-port-slirp4netns
           - ubuntu: 22.04
-            containerd: v1.7.3
+            containerd: v1.7.11
             target: test-integration-rootless-port-slirp4netns
           - ubuntu: 22.04
             containerd: main
@@ -141,7 +185,7 @@ jobs:
       CONTAINERD_VERSION: "${{ matrix.containerd }}"
       TEST_TARGET: "${{ matrix.target }}"
     steps:
-      - uses: actions/checkout@v3.5.3
+      - uses: actions/checkout@v4.1.1
         with:
           fetch-depth: 1
       - name: "Register QEMU (tonistiigi/binfmt)"
@@ -156,12 +200,12 @@ jobs:
     timeout-minutes: 40
     strategy:
       matrix:
-        go-version: ["1.19.x", "1.20.x"]
+        go-version: ["1.20.x", "1.21.x"]
     steps:
-      - uses: actions/checkout@v3.5.3
+      - uses: actions/checkout@v4.1.1
         with:
           fetch-depth: 1
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
@@ -173,10 +217,10 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v3.5.3
+      - uses: actions/checkout@v4.1.1
         with:
           fetch-depth: 1
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -184,11 +228,13 @@ jobs:
       - name: "Enable BuildKit"
         run: |
           set -eux -o pipefail
+          # Enable BuildKit explicitly
           sudo apt-get install -y moreutils
           cat /etc/docker/daemon.json
           jq '.features.buildkit = true' </etc/docker/daemon.json  | sudo sponge /etc/docker/daemon.json
           cat /etc/docker/daemon.json
           sudo systemctl restart docker
+          # Print docker info
           docker info
           docker version
       - name: "Register QEMU (tonistiigi/binfmt)"
@@ -198,3 +244,66 @@ jobs:
           sudo apt-get install -y expect
       - name: "Ensure that the integration test suite is compatible with Docker"
         run: go test -timeout 20m -v -exec sudo ./cmd/nerdctl/... -args -test.target=docker -test.kill-daemon
+      - name: "Ensure that the IPv6 integration test suite is compatible with Docker"
+        run: go test -timeout 20m -v -exec sudo ./cmd/nerdctl/... -args -test.target=docker -test.kill-daemon -test.ipv6
+
+  test-integration-windows:
+    # A "larger" runner is used for enabling Hyper-V containers
+    runs-on: windows-2022-8-cores
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4.1.1
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          check-latest: true
+      - run: go install ./cmd/nerdctl
+      - uses: actions/checkout@v4.1.1
+        with:
+          repository: containerd/containerd
+          ref: v1.7.11
+          path: containerd
+          fetch-depth: 1
+      - name: "Set up CNI"
+        working-directory: containerd
+        run: GOPATH=$(go env GOPATH) script/setup/install-cni-windows
+      - name: "Set up containerd"
+        env:
+          ctrdVersion: 1.7.11
+        run: powershell hack/configure-windows-ci.ps1
+      # TODO: Run unit tests
+      - name: "Run integration tests"
+        run: go test -v ./cmd/...
+
+  test-integration-freebsd:
+    name: FreeBSD
+    # "Larger" runner is needed for nested virtualization
+    # https://github.com/organizations/containerd/settings/actions/runners
+    runs-on: ubuntu-latest-4-cores
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: actions/cache@v3
+        with:
+          path: /root/.vagrant.d
+          key: vagrant-${{ matrix.box }}
+      - name: Set up vagrant
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvirt-daemon libvirt-daemon-system vagrant vagrant-libvirt
+          sudo systemctl enable --now libvirtd
+      - name: Boot VM
+        run: |
+          ln -sf Vagrantfile.freebsd Vagrantfile
+          sudo vagrant up --no-tty
+      - name: test-unit
+        run: sudo vagrant up --provision-with=test-unit
+      - name: test-integration
+        run: sudo vagrant up --provision-with=test-integration

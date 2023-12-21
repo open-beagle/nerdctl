@@ -16,7 +16,11 @@
 
 package types
 
-import "io"
+import (
+	"io"
+
+	"github.com/containerd/nerdctl/pkg/imgutil"
+)
 
 // ImageListOptions specifies options for `nerdctl image list`.
 type ImageListOptions struct {
@@ -78,6 +82,13 @@ type ImageConvertOptions struct {
 	EstargzExternalToc bool
 	// EstargzKeepDiffID convert to esgz without changing diffID (cannot be used in conjunction with '--estargz-record-in'. must be specified with '--estargz-external-toc')
 	EstargzKeepDiffID bool
+	// #endregion
+
+	// #region zstd flags
+	// Zstd convert legacy tar(.gz) layers to zstd. Should be used in conjunction with '--oci'
+	Zstd bool
+	// ZstdCompressionLevel zstd compression level
+	ZstdCompressionLevel int
 	// #endregion
 
 	// #region zstd:chunked flags
@@ -152,6 +163,7 @@ type ImagePushOptions struct {
 	Stdout      io.Writer
 	GOptions    GlobalCommandOptions
 	SignOptions ImageSignOptions
+	SociOptions SociOptions
 	// Platforms convert content for a specific platform
 	Platforms []string
 	// AllPlatforms convert content for all platforms
@@ -185,6 +197,8 @@ type ImagePullOptions struct {
 	Quiet bool
 	// multiaddr of IPFS API (default uses $IPFS_PATH env variable if defined or local directory ~/.ipfs)
 	IPFSAddress string
+	// Flags to pass into remote snapshotters
+	RFlags imgutil.RemoteSnapshotterFlags
 }
 
 // ImageTagOptions specifies options for `nerdctl (image) tag`.
@@ -255,4 +269,12 @@ type ImageVerifyOptions struct {
 	CosignCertificateOidcIssuer string
 	// CosignCertificateOidcIssuerRegexp A regular expression alternative to --certificate-oidc-issuer for --verify=cosign. Accepts the Go regular expression syntax described at https://golang.org/s/re2syntax. Either --cosign-certificate-oidc-issuer or --cosign-certificate-oidc-issuer-regexp must be set for keyless flows
 	CosignCertificateOidcIssuerRegexp string
+}
+
+// SociOptions contains options for SOCI.
+type SociOptions struct {
+	// Span size that soci index uses to segment layer data. Default is 4 MiB.
+	SpanSize int64
+	// Minimum layer size to build zTOC for. Smaller layers won't have zTOC and not lazy pulled. Default is 10 MiB.
+	MinLayerSize int64
 }

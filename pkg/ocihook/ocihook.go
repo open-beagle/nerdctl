@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	gocni "github.com/containerd/go-cni"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/bypass4netnsutil"
 	"github.com/containerd/nerdctl/pkg/dnsutil/hostsstore"
 	"github.com/containerd/nerdctl/pkg/labels"
@@ -40,7 +41,6 @@ import (
 
 	b4nndclient "github.com/rootless-containers/bypass4netns/pkg/api/daemon/client"
 	rlkclient "github.com/rootless-containers/rootlesskit/pkg/api/client"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -79,7 +79,7 @@ func Run(stdin io.Reader, stderr io.Writer, event, dataStore, cniPath, cniNetcon
 		return err
 	}
 	defer logFile.Close()
-	logrus.SetOutput(io.MultiWriter(stderr, logFile))
+	log.L.Logger.SetOutput(io.MultiWriter(stderr, logFile))
 
 	opts, err := newHandlerOpts(&state, dataStore, cniPath, cniNetconfPath)
 	if err != nil {
@@ -165,7 +165,7 @@ func newHandlerOpts(state *specs.State, dataStore, cniPath, cniNetconfPath strin
 			return nil, err
 		}
 		if o.cni == nil {
-			logrus.Warnf("no CNI network could be loaded from the provided network names: %v", networks)
+			log.L.Warnf("no CNI network could be loaded from the provided network names: %v", networks)
 		}
 	default:
 		return nil, fmt.Errorf("unexpected network type %v", netType)
@@ -188,7 +188,11 @@ func newHandlerOpts(state *specs.State, dataStore, cniPath, cniNetconfPath strin
 	}
 
 	if macAddress, ok := o.state.Annotations[labels.MACAddress]; ok {
-		o.contianerMAC = macAddress
+		o.containerMAC = macAddress
+	}
+
+	if ip6Address, ok := o.state.Annotations[labels.IP6Address]; ok {
+		o.containerIP6 = ip6Address
 	}
 
 	if rootlessutil.IsRootlessChild() {
@@ -226,7 +230,8 @@ type handlerOpts struct {
 	bypassClient      b4nndclient.Client
 	extraHosts        map[string]string // host:ip
 	containerIP       string
-	contianerMAC      string
+	containerMAC      string
+	containerIP6      string
 }
 
 // hookSpec is from https://github.com/containerd/containerd/blob/v1.4.3/cmd/containerd/command/oci-hook.go#L59-L64
@@ -300,7 +305,7 @@ func getPortMapOpts(opts *handlerOpts) ([]gocni.NamespaceOpts, error) {
 		)
 		info, err := opts.rootlessKitClient.Info(context.TODO())
 		if err != nil {
-			logrus.WithError(err).Warn("cannot call RootlessKit Info API, make sure you have RootlessKit v0.14.1 or later")
+			log.L.WithError(err).Warn("cannot call RootlessKit Info API, make sure you have RootlessKit v0.14.1 or later")
 		} else {
 			childIP = info.NetworkDriver.ChildIP
 			portDriverDisallowsLoopbackChildIP = info.PortDriver.DisallowLoopbackChildIP // true for slirp4netns port driver
@@ -336,7 +341,7 @@ func getPortMapOpts(opts *handlerOpts) ([]gocni.NamespaceOpts, error) {
 func getIPAddressOpts(opts *handlerOpts) ([]gocni.NamespaceOpts, error) {
 	if opts.containerIP != "" {
 		if rootlessutil.IsRootlessChild() {
-			logrus.Debug("container IP assignment is not fully supported in rootless mode. The IP is not accessible from the host (but still accessible from other containers).")
+			log.L.Debug("container IP assignment is not fully supported in rootless mode. The IP is not accessible from the host (but still accessible from other containers).")
 		}
 
 		return []gocni.NamespaceOpts{
@@ -353,14 +358,31 @@ func getIPAddressOpts(opts *handlerOpts) ([]gocni.NamespaceOpts, error) {
 }
 
 func getMACAddressOpts(opts *handlerOpts) ([]gocni.NamespaceOpts, error) {
-	if opts.contianerMAC != "" {
+	if opts.containerMAC != "" {
 		return []gocni.NamespaceOpts{
 			gocni.WithLabels(map[string]string{
 				// allow loose CNI argument verification
 				// FYI: https://github.com/containernetworking/cni/issues/560
 				"IgnoreUnknown": "1",
 			}),
-			gocni.WithArgs("MAC", opts.contianerMAC),
+			gocni.WithArgs("MAC", opts.containerMAC),
+		}, nil
+	}
+	return nil, nil
+}
+
+func getIP6AddressOpts(opts *handlerOpts) ([]gocni.NamespaceOpts, error) {
+	if opts.containerIP6 != "" {
+		if rootlessutil.IsRootlessChild() {
+			log.L.Debug("container IP6 assignment is not fully supported in rootless mode. The IP6 is not accessible from the host (but still accessible from other containers).")
+		}
+		return []gocni.NamespaceOpts{
+			gocni.WithLabels(map[string]string{
+				// allow loose CNI argument verification
+				// FYI: https://github.com/containernetworking/cni/issues/560
+				"IgnoreUnknown": "1",
+			}),
+			gocni.WithCapability("ips", []string{opts.containerIP6}),
 		}, nil
 	}
 	return nil, nil
@@ -391,10 +413,15 @@ func onCreateRuntime(opts *handlerOpts) error {
 		if err != nil {
 			return err
 		}
+		ip6AddressOpts, err := getIP6AddressOpts(opts)
+		if err != nil {
+			return err
+		}
 		var namespaceOpts []gocni.NamespaceOpts
 		namespaceOpts = append(namespaceOpts, portMapOpts...)
 		namespaceOpts = append(namespaceOpts, ipAddressOpts...)
 		namespaceOpts = append(namespaceOpts, macAddressOpts...)
+		namespaceOpts = append(namespaceOpts, ip6AddressOpts...)
 		hsMeta := hostsstore.Meta{
 			Namespace:  opts.state.Annotations[labels.Namespace],
 			ID:         opts.state.ID,
@@ -478,12 +505,17 @@ func onPostStop(opts *handlerOpts) error {
 		if err != nil {
 			return err
 		}
+		ip6AddressOpts, err := getIP6AddressOpts(opts)
+		if err != nil {
+			return err
+		}
 		var namespaceOpts []gocni.NamespaceOpts
 		namespaceOpts = append(namespaceOpts, portMapOpts...)
 		namespaceOpts = append(namespaceOpts, ipAddressOpts...)
 		namespaceOpts = append(namespaceOpts, macAddressOpts...)
+		namespaceOpts = append(namespaceOpts, ip6AddressOpts...)
 		if err := opts.cni.Remove(ctx, opts.fullID, "", namespaceOpts...); err != nil {
-			logrus.WithError(err).Errorf("failed to call cni.Remove")
+			log.L.WithError(err).Errorf("failed to call cni.Remove")
 			return err
 		}
 		hs, err := hostsstore.NewStore(opts.dataStore)
@@ -517,7 +549,7 @@ func writePidFile(path string, pid int) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(f, "%d", pid)
+	_, err = fmt.Fprint(f, pid)
 	f.Close()
 	if err != nil {
 		return err

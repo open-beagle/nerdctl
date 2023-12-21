@@ -22,6 +22,7 @@ import (
 	"runtime"
 
 	"github.com/containerd/console"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/api/types"
 	"github.com/containerd/nerdctl/pkg/clientutil"
 	"github.com/containerd/nerdctl/pkg/cmd/container"
@@ -34,7 +35,6 @@ import (
 	"github.com/containerd/nerdctl/pkg/netutil"
 	"github.com/containerd/nerdctl/pkg/signalutil"
 	"github.com/containerd/nerdctl/pkg/taskutil"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -120,8 +120,8 @@ func setCreateFlags(cmd *cobra.Command) {
 	cmd.Flags().StringSlice("dns-option", nil, "Set DNS options")
 	// publish is defined as StringSlice, not StringArray, to allow specifying "--publish=80:80,443:443" (compatible with Podman)
 	cmd.Flags().StringSliceP("publish", "p", nil, "Publish a container's port(s) to the host")
-	// FIXME: not support IPV6 yet
 	cmd.Flags().String("ip", "", "IPv4 address to assign to the container")
+	cmd.Flags().String("ip6", "", "IPv6 address to assign to the container")
 	cmd.Flags().StringP("hostname", "h", "", "Container host name")
 	cmd.Flags().String("mac-address", "", "MAC address to assign to the container")
 	// #endregion
@@ -172,7 +172,11 @@ func setCreateFlags(cmd *cobra.Command) {
 	// #region security flags
 	cmd.Flags().StringArray("security-opt", []string{}, "Security options")
 	cmd.RegisterFlagCompletionFunc("security-opt", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		return []string{"seccomp=", "seccomp=unconfined", "apparmor=", "apparmor=" + defaults.AppArmorProfileName, "apparmor=unconfined", "no-new-privileges", "privileged-without-host-devices"}, cobra.ShellCompDirectiveNoFileComp
+		return []string{
+			"seccomp=", "seccomp=" + defaults.SeccompProfileName, "seccomp=unconfined",
+			"apparmor=", "apparmor=" + defaults.AppArmorProfileName, "apparmor=unconfined",
+			"no-new-privileges",
+			"privileged-without-host-devices"}, cobra.ShellCompDirectiveNoFileComp
 	})
 	// cap-add and cap-drop are defined as StringSlice, not StringArray, to allow specifying "--cap-add=CAP_SYS_ADMIN,CAP_NET_ADMIN" (compatible with Podman)
 	cmd.Flags().StringSlice("cap-add", []string{}, "Add Linux capabilities")
@@ -317,7 +321,7 @@ func runAction(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load networking flags: %s", err)
 	}
 
-	netManager, err := containerutil.NewNetworkingOptionsManager(createOpt.GOptions, netFlags)
+	netManager, err := containerutil.NewNetworkingOptionsManager(createOpt.GOptions, netFlags, client)
 	if err != nil {
 		return err
 	}
@@ -344,11 +348,11 @@ func runAction(cmd *cobra.Command, args []string) error {
 			// network setup/cleanup from the main nerdctl executable.
 			if runtime.GOOS == "windows" {
 				if err := netManager.CleanupNetworking(ctx, c); err != nil {
-					logrus.Warnf("failed to clean up container networking: %s", err)
+					log.L.Warnf("failed to clean up container networking: %s", err)
 				}
 			}
-			if err := container.RemoveContainer(ctx, c, createOpt.GOptions, true, true); err != nil {
-				logrus.WithError(err).Warnf("failed to remove container %s", id)
+			if err := container.RemoveContainer(ctx, c, createOpt.GOptions, true, true, client); err != nil {
+				log.L.WithError(err).Warnf("failed to remove container %s", id)
 			}
 		}()
 	}
@@ -378,12 +382,12 @@ func runAction(cmd *cobra.Command, args []string) error {
 	}
 
 	if createOpt.Detach {
-		fmt.Fprintf(createOpt.Stdout, "%s\n", id)
+		fmt.Fprintln(createOpt.Stdout, id)
 		return nil
 	}
 	if createOpt.TTY {
 		if err := consoleutil.HandleConsoleResize(ctx, task, con); err != nil {
-			logrus.WithError(err).Error("console resize")
+			log.L.WithError(err).Error("console resize")
 		}
 	} else {
 		sigC := signalutil.ForwardAllSignals(ctx, task)
@@ -411,7 +415,7 @@ func runAction(cmd *cobra.Command, args []string) error {
 	case status := <-statusC:
 		if createOpt.Rm {
 			if _, taskDeleteErr := task.Delete(ctx); taskDeleteErr != nil {
-				logrus.Error(taskDeleteErr)
+				log.L.Error(taskDeleteErr)
 			}
 		}
 		code, _, err := status.Result()

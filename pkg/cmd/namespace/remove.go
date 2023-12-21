@@ -22,7 +22,7 @@ import (
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/log"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/api/types"
 )
 
@@ -43,7 +43,7 @@ func Remove(ctx context.Context, client *containerd.Client, deletedNamespaces []
 				continue
 			}
 		}
-		_, err := fmt.Fprintf(options.Stdout, "%s\n", target)
+		_, err := fmt.Fprintln(options.Stdout, target)
 		return err
 	}
 	return exitErr

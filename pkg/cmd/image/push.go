@@ -32,6 +32,7 @@ import (
 	"github.com/containerd/containerd/remotes"
 	"github.com/containerd/containerd/remotes/docker"
 	dockerconfig "github.com/containerd/containerd/remotes/docker/config"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/api/types"
 	"github.com/containerd/nerdctl/pkg/errutil"
 	"github.com/containerd/nerdctl/pkg/imgutil/dockerconfigresolver"
@@ -40,12 +41,12 @@ import (
 	"github.com/containerd/nerdctl/pkg/platformutil"
 	"github.com/containerd/nerdctl/pkg/referenceutil"
 	"github.com/containerd/nerdctl/pkg/signutil"
+	"github.com/containerd/nerdctl/pkg/snapshotterutil"
 	"github.com/containerd/stargz-snapshotter/estargz"
 	"github.com/containerd/stargz-snapshotter/estargz/zstdchunked"
 	estargzconvert "github.com/containerd/stargz-snapshotter/nativeconverter/estargz"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/sirupsen/logrus"
 )
 
 // Push pushes an image specified by `rawRef`.
@@ -54,7 +55,7 @@ func Push(ctx context.Context, client *containerd.Client, rawRef string, options
 		if scheme != "ipfs" {
 			return fmt.Errorf("ipfs scheme is only supported but got %q", scheme)
 		}
-		logrus.Infof("pushing image %q to IPFS", ref)
+		log.G(ctx).Infof("pushing image %q to IPFS", ref)
 
 		var ipfsPath string
 		if options.IpfsAddress != "" {
@@ -75,7 +76,7 @@ func Push(ctx context.Context, client *containerd.Client, rawRef string, options
 		}
 		c, err := ipfs.Push(ctx, client, ref, layerConvert, options.AllPlatforms, options.Platforms, options.IpfsEnsureImage, ipfsPath)
 		if err != nil {
-			logrus.WithError(err).Warnf("ipfs push failed")
+			log.G(ctx).WithError(err).Warnf("ipfs push failed")
 			return err
 		}
 		fmt.Fprintln(options.Stdout, c)
@@ -106,7 +107,7 @@ func Push(ctx context.Context, client *containerd.Client, rawRef string, options
 			return fmt.Errorf("failed to create a tmp reduced-platform image %q (platform=%v): %w", pushRef, options.Platforms, err)
 		}
 		defer client.ImageService().Delete(ctx, platImg.Name, images.SynchronousDelete())
-		logrus.Infof("pushing as a reduced-platform image (%s, %s)", platImg.Target.MediaType, platImg.Target.Digest)
+		log.G(ctx).Infof("pushing as a reduced-platform image (%s, %s)", platImg.Target.MediaType, platImg.Target.Digest)
 	}
 
 	if options.Estargz {
@@ -116,7 +117,7 @@ func Push(ctx context.Context, client *containerd.Client, rawRef string, options
 			return fmt.Errorf("failed to convert to eStargz: %v", err)
 		}
 		defer client.ImageService().Delete(ctx, esgzImg.Name, images.SynchronousDelete())
-		logrus.Infof("pushing as an eStargz image (%s, %s)", esgzImg.Target.MediaType, esgzImg.Target.Digest)
+		log.G(ctx).Infof("pushing as an eStargz image (%s, %s)", esgzImg.Target.MediaType, esgzImg.Target.Digest)
 	}
 
 	// In order to push images where most layers are the same but the
@@ -132,7 +133,7 @@ func Push(ctx context.Context, client *containerd.Client, rawRef string, options
 
 	var dOpts []dockerconfigresolver.Opt
 	if options.GOptions.InsecureRegistry {
-		logrus.Warnf("skipping verifying HTTPS certs for %q", refDomain)
+		log.G(ctx).Warnf("skipping verifying HTTPS certs for %q", refDomain)
 		dOpts = append(dOpts, dockerconfigresolver.WithSkipVerifyCerts(true))
 	}
 	dOpts = append(dOpts, dockerconfigresolver.WithHostsDirs(options.GOptions.HostsDir))
@@ -154,7 +155,7 @@ func Push(ctx context.Context, client *containerd.Client, rawRef string, options
 			return err
 		}
 		if options.GOptions.InsecureRegistry {
-			logrus.WithError(err).Warnf("server %q does not seem to support HTTPS, falling back to plain HTTP", refDomain)
+			log.G(ctx).WithError(err).Warnf("server %q does not seem to support HTTPS, falling back to plain HTTP", refDomain)
 			dOpts = append(dOpts, dockerconfigresolver.WithPlainHTTP(true))
 			resolver, err = dockerconfigresolver.New(ctx, refDomain, dOpts...)
 			if err != nil {
@@ -162,8 +163,8 @@ func Push(ctx context.Context, client *containerd.Client, rawRef string, options
 			}
 			return pushFunc(resolver)
 		}
-		logrus.WithError(err).Errorf("server %q does not seem to support HTTPS", refDomain)
-		logrus.Info("Hint: you may want to try --insecure-registry to allow plain HTTP (if you are in a trusted network)")
+		log.G(ctx).WithError(err).Errorf("server %q does not seem to support HTTPS", refDomain)
+		log.G(ctx).Info("Hint: you may want to try --insecure-registry to allow plain HTTP (if you are in a trusted network)")
 		return err
 	}
 
@@ -181,6 +182,14 @@ func Push(ctx context.Context, client *containerd.Client, rawRef string, options
 		options.SignOptions); err != nil {
 		return err
 	}
+	if options.GOptions.Snapshotter == "soci" {
+		if err = snapshotterutil.CreateSoci(ref, options.GOptions, options.AllPlatforms, options.Platforms, options.SociOptions); err != nil {
+			return err
+		}
+		if err = snapshotterutil.PushSoci(ref, options.GOptions, options.AllPlatforms, options.Platforms); err != nil {
+			return err
+		}
+	}
 	if options.Quiet {
 		fmt.Fprintln(options.Stdout, ref)
 	}
@@ -191,14 +200,14 @@ func eStargzConvertFunc() converter.ConvertFunc {
 	convertToESGZ := estargzconvert.LayerConvertFunc()
 	return func(ctx context.Context, cs content.Store, desc ocispec.Descriptor) (*ocispec.Descriptor, error) {
 		if isReusableESGZ(ctx, cs, desc) {
-			logrus.Infof("reusing estargz %s without conversion", desc.Digest)
+			log.L.Infof("reusing estargz %s without conversion", desc.Digest)
 			return nil, nil
 		}
 		newDesc, err := convertToESGZ(ctx, cs, desc)
 		if err != nil {
 			return nil, err
 		}
-		logrus.Infof("converted %q to %s", desc.MediaType, newDesc.Digest)
+		log.L.Infof("converted %q to %s", desc.MediaType, newDesc.Digest)
 		return newDesc, err
 	}
 

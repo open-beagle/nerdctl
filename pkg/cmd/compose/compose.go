@@ -76,13 +76,13 @@ func New(client *containerd.Client, globalOptions types.GlobalCommandOptions, op
 		return nil, err
 	}
 	options.VolumeExists = func(volName string) (bool, error) {
-		if _, volGetErr := volStore.Get(volName, false); volGetErr == nil {
+		_, volGetErr := volStore.Get(volName, false)
+		if volGetErr == nil {
 			return true, nil
 		} else if errors.Is(volGetErr, errdefs.ErrNotFound) {
 			return false, nil
-		} else {
-			return false, volGetErr
 		}
+		return false, volGetErr
 	}
 
 	options.ImageExists = func(ctx context.Context, rawRef string) (bool, error) {
@@ -125,7 +125,7 @@ func New(client *containerd.Client, globalOptions types.GlobalCommandOptions, op
 				ipfsPath = dir
 			}
 			_, err = ipfs.EnsureImage(ctx, client, stdout, stderr, globalOptions.Snapshotter, scheme, ref,
-				pullMode, ocispecPlatforms, nil, quiet, ipfsPath)
+				pullMode, ocispecPlatforms, nil, quiet, ipfsPath, imgutil.RemoteSnapshotterFlags{})
 			return err
 		}
 
@@ -136,7 +136,7 @@ func New(client *containerd.Client, globalOptions types.GlobalCommandOptions, op
 		}
 
 		_, err = imgutil.EnsureImage(ctx, client, stdout, stderr, globalOptions.Snapshotter, ref,
-			pullMode, globalOptions.InsecureRegistry, globalOptions.HostsDir, ocispecPlatforms, nil, quiet)
+			pullMode, globalOptions.InsecureRegistry, globalOptions.HostsDir, ocispecPlatforms, nil, quiet, imgutil.RemoteSnapshotterFlags{})
 		return err
 	}
 

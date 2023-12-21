@@ -25,17 +25,17 @@ import (
 	"github.com/compose-spec/compose-go/types"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/identifiers"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/reflectutil"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
-	"github.com/sirupsen/logrus"
 )
 
 func parseBuildConfig(c *types.BuildConfig, project *types.Project, imageName string) (*Build, error) {
 	if unknown := reflectutil.UnknownNonEmptyFields(c,
 		"Context", "Dockerfile", "Args", "CacheFrom", "Target", "Labels", "Secrets",
 	); len(unknown) > 0 {
-		logrus.Warnf("Ignoring: build: %+v", unknown)
+		log.L.Warnf("Ignoring: build: %+v", unknown)
 	}
 
 	if c.Context == "" {
@@ -44,16 +44,13 @@ func parseBuildConfig(c *types.BuildConfig, project *types.Project, imageName st
 	if strings.Contains(c.Context, "://") {
 		return nil, fmt.Errorf("build: URL-style context (%q) is not supported yet: %w", c.Context, errdefs.ErrNotImplemented)
 	}
-	if filepath.IsAbs(c.Context) {
-		logrus.Warnf("build.config should be relative path, got %q", c.Context)
-	}
 	ctxDir := project.RelativePath(c.Context)
 
 	var b Build
 	b.BuildArgs = append(b.BuildArgs, "-t="+imageName)
 	if c.Dockerfile != "" {
 		if filepath.IsAbs(c.Dockerfile) {
-			logrus.Warnf("build.dockerfile should be relative path, got %q", c.Dockerfile)
+			log.L.Warnf("build.dockerfile should be relative path, got %q", c.Dockerfile)
 			b.BuildArgs = append(b.BuildArgs, "-f="+c.Dockerfile)
 		} else {
 			// no need to use securejoin
@@ -95,7 +92,7 @@ func parseBuildConfig(c *types.BuildConfig, project *types.Project, imageName st
 		}
 		var src string
 		if filepath.IsAbs(projectSecret.File) {
-			logrus.Warnf("build.secrets should be relative path, got %q", projectSecret.File)
+			log.L.Warnf("build.secrets should be relative path, got %q", projectSecret.File)
 			src = projectSecret.File
 		} else {
 			var err error

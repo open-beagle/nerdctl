@@ -68,7 +68,11 @@ services:
 	comp := testutil.NewComposeDir(t, fmt.Sprintf(dockerComposeYAML, "3.13"))
 	defer comp.CleanUp()
 
-	base.ComposeCmd("-f", comp.YAMLFullPath(), "config", "--hash=*").AssertOutContains("hello1")
+	// `--hash=*` is broken in Docker Compose v2.23.0: https://github.com/docker/compose/issues/11145
+	if base.Target == testutil.Nerdctl {
+		base.ComposeCmd("-f", comp.YAMLFullPath(), "config", "--hash=*").AssertOutContains("hello1")
+	}
+
 	hash := base.ComposeCmd("-f", comp.YAMLFullPath(), "config", "--hash=hello1").Out()
 
 	newComp := testutil.NewComposeDir(t, fmt.Sprintf(dockerComposeYAML, "3.14"))
@@ -129,4 +133,25 @@ services:
 	base.ComposeCmd("config").AssertOutContains("alpine:3.14")
 	base.ComposeCmd("--project-directory", comp.Dir(), "config", "--services").AssertOutContainsAll("hello1\n", "hello2\n")
 	base.ComposeCmd("--project-directory", comp.Dir(), "config").AssertOutContains("alpine:3.14")
+}
+
+func TestComposeConfigWithEnvFile(t *testing.T) {
+	base := testutil.NewBase(t)
+
+	const dockerComposeYAML = `
+services:
+  hello:
+    image: ${image}
+`
+
+	comp := testutil.NewComposeDir(t, dockerComposeYAML)
+	defer comp.CleanUp()
+
+	envFile := filepath.Join(comp.Dir(), "env")
+	const envFileContent = `
+image: hello-world
+`
+	assert.NilError(t, os.WriteFile(envFile, []byte(envFileContent), 0644))
+
+	base.ComposeCmd("-f", comp.YAMLFullPath(), "--env-file", envFile, "config").AssertOutContains("image: hello-world")
 }

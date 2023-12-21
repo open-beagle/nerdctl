@@ -24,9 +24,6 @@ import (
 )
 
 func TestComposeStop(t *testing.T) {
-	// docker-compose v2 hides exited/killed containers in `compose ps`, and shows
-	// them if `-a` is passed, which is not supported yet by `nerdctl compose`.
-	testutil.DockerIncompatible(t)
 	base := testutil.NewBase(t)
 	var dockerComposeYAML = fmt.Sprintf(`
 version: '3.1'
@@ -70,11 +67,11 @@ volumes:
 
 	// stop should (only) stop the given service.
 	base.ComposeCmd("-f", comp.YAMLFullPath(), "stop", "db").AssertOK()
-	base.ComposeCmd("-f", comp.YAMLFullPath(), "ps", "db").AssertOutContainsAny("Exit", "exited")
+	base.ComposeCmd("-f", comp.YAMLFullPath(), "ps", "db", "-a").AssertOutContainsAny("Exit", "exited")
 	base.ComposeCmd("-f", comp.YAMLFullPath(), "ps", "wordpress").AssertOutContainsAny("Up", "running")
 
 	// `--timeout` arg should work properly.
 	base.ComposeCmd("-f", comp.YAMLFullPath(), "stop", "--timeout", "5", "wordpress").AssertOK()
-	base.ComposeCmd("-f", comp.YAMLFullPath(), "ps", "wordpress").AssertOutContainsAny("Exit", "exited")
+	base.ComposeCmd("-f", comp.YAMLFullPath(), "ps", "wordpress", "-a").AssertOutContainsAny("Exit", "exited")
 
 }

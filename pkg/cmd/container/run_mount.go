@@ -25,14 +25,17 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/errdefs"
+	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/oci"
 	"github.com/containerd/containerd/pkg/userns"
 	"github.com/containerd/continuity/fs"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/api/types"
 	"github.com/containerd/nerdctl/pkg/cmd/volume"
 	"github.com/containerd/nerdctl/pkg/idgen"
@@ -45,7 +48,6 @@ import (
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/opencontainers/image-spec/identity"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/sirupsen/logrus"
 )
 
 // copy from https://github.com/containerd/containerd/blob/v1.6.0-rc.1/pkg/cri/opts/spec_linux.go#L129-L151
@@ -91,7 +93,8 @@ func withMounts(mounts []specs.Mount) oci.SpecOpts {
 func parseMountFlags(volStore volumestore.VolumeStore, options types.ContainerCreateOptions) ([]*mountutil.Processed, error) {
 	var parsed []*mountutil.Processed //nolint:prealloc
 	for _, v := range strutil.DedupeStrSlice(options.Volume) {
-		x, err := mountutil.ProcessFlagV(v, volStore)
+		// createDir=true for -v option to allow creation of directory on host if not found.
+		x, err := mountutil.ProcessFlagV(v, volStore, true)
 		if err != nil {
 			return nil, err
 		}
@@ -159,6 +162,14 @@ func generateMountOpts(ctx context.Context, client *containerd.Client, ensuredIm
 		// When the Unmount fails, RemoveAll will incorrectly delete data from the mounted dir
 		defer os.Remove(tempDir)
 
+		// Add a lease of 1 hour to the view so that it is not garbage collected
+		// Note(gsamfira): should we make this shorter?
+		ctx, done, err := client.WithLease(ctx, leases.WithRandomID(), leases.WithExpiration(1*time.Hour))
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed to create lease: %w", err)
+		}
+		defer done(ctx)
+
 		var mounts []mount.Mount
 		mounts, err = s.View(ctx, tempDir, chainID)
 		if err != nil {
@@ -169,26 +180,14 @@ func generateMountOpts(ctx context.Context, client *containerd.Client, ensuredIm
 		// https://github.com/containerd/containerd/commit/791e175c79930a34cfbb2048fbcaa8493fd2c86b
 		unmounter := func(mountPath string) {
 			if uerr := mount.Unmount(mountPath, 0); uerr != nil {
-				logrus.Debugf("Failed to unmount snapshot %q", tempDir)
+				log.G(ctx).Debugf("Failed to unmount snapshot %q", tempDir)
 				if err == nil {
 					err = uerr
 				}
 			}
 		}
 
-		if runtime.GOOS == "windows" {
-			for _, m := range mounts {
-				defer unmounter(m.Source)
-				// appending the layerID to the root.
-				mountPath := filepath.Join(tempDir, filepath.Base(m.Source))
-				if err := m.Mount(mountPath); err != nil {
-					if err := s.Remove(ctx, tempDir); err != nil && !errdefs.IsNotFound(err) {
-						return nil, nil, nil, err
-					}
-					return nil, nil, nil, err
-				}
-			}
-		} else if runtime.GOOS == "linux" {
+		if runtime.GOOS == "linux" {
 			defer unmounter(tempDir)
 			for _, m := range mounts {
 				m := m
@@ -260,7 +259,7 @@ func generateMountOpts(ctx context.Context, client *containerd.Client, ensuredIm
 		}
 		anonVolName := idgen.GenerateID()
 
-		logrus.Debugf("creating anonymous volume %q, for \"VOLUME %s\"",
+		log.G(ctx).Debugf("creating anonymous volume %q, for \"VOLUME %s\"",
 			anonVolName, imgVolRaw)
 		anonVol, err := volStore.Create(anonVolName, []string{})
 		if err != nil {
@@ -355,7 +354,7 @@ func copyExistingContents(source, destination string) error {
 		return err
 	}
 	if len(dstList) != 0 {
-		logrus.Debugf("volume at %q is not initially empty, skipping copying", destination)
+		log.L.Debugf("volume at %q is not initially empty, skipping copying", destination)
 		return nil
 	}
 	return fs.CopyDir(destination, source)

@@ -26,11 +26,11 @@ import (
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/errdefs"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/api/types"
 	"github.com/containerd/nerdctl/pkg/containerutil"
 	"github.com/containerd/nerdctl/pkg/idutil/containerwalker"
 	"github.com/moby/sys/signal"
-	"github.com/sirupsen/logrus"
 )
 
 // Kill kills a list of containers
@@ -57,7 +57,7 @@ func Kill(ctx context.Context, client *containerd.Client, reqs []string, options
 				}
 				return err
 			}
-			_, err := fmt.Fprintf(options.Stdout, "%s\n", found.Container.ID())
+			_, err := fmt.Fprintln(options.Stdout, found.Container.ID())
 			return err
 		},
 	}
@@ -101,7 +101,7 @@ func killContainer(ctx context.Context, container containerd.Container, signal s
 	// signal will be sent once resume is finished
 	if paused {
 		if err := task.Resume(ctx); err != nil {
-			logrus.Warnf("cannot unpause container %s: %s", container.ID(), err)
+			log.G(ctx).Warnf("cannot unpause container %s: %s", container.ID(), err)
 		}
 	}
 	return nil

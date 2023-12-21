@@ -191,14 +191,14 @@ func formatAndPrintContainerInfo(containers []container.ListItem, options Format
 	for _, c := range containers {
 		if tmpl != nil {
 			var b bytes.Buffer
-			if err := tmpl.Execute(&b, c); err != nil {
+			if err := tmpl.Execute(&b, &c); err != nil {
 				return err
 			}
 			if _, err := fmt.Fprintln(w, b.String()); err != nil {
 				return err
 			}
 		} else if options.Quiet {
-			if _, err := fmt.Fprintf(w, "%s\n", c.ID); err != nil {
+			if _, err := fmt.Fprintln(w, c.ID); err != nil {
 				return err
 			}
 		} else {
@@ -210,7 +210,7 @@ func formatAndPrintContainerInfo(containers []container.ListItem, options Format
 				formatter.TimeSinceInHuman(c.CreatedAt),
 				c.Status,
 				c.Ports,
-				c.Names[0],
+				c.Names,
 			}
 			if wide {
 				format += "\t%s\t%s\t%s\n"

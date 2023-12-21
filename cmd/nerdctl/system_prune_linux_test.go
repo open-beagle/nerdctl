@@ -25,9 +25,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/buildkitutil"
 	"github.com/containerd/nerdctl/pkg/testutil"
-	"github.com/sirupsen/logrus"
 )
 
 func TestSystemPrune(t *testing.T) {
@@ -46,6 +46,9 @@ func TestSystemPrune(t *testing.T) {
 	base.Cmd("volume", "create", vID).AssertOK()
 	defer base.Cmd("volume", "rm", vID).Run()
 
+	vID2 := base.Cmd("volume", "create").Out()
+	defer base.Cmd("volume", "rm", vID2).Run()
+
 	tID := testutil.Identifier(t)
 	base.Cmd("run", "-v", fmt.Sprintf("%s:/volume", vID), "--net", nID,
 		"--name", tID, testutil.CommonImage).AssertOK()
@@ -55,7 +58,8 @@ func TestSystemPrune(t *testing.T) {
 	base.Cmd("images").AssertOutContains(testutil.ImageRepo(testutil.CommonImage))
 
 	base.Cmd("system", "prune", "-f", "--volumes", "--all").AssertOK()
-	base.Cmd("volume", "ls").AssertNoOut(vID)
+	base.Cmd("volume", "ls").AssertOutContains(vID) // docker system prune --all --volume does not prune named volume
+	base.Cmd("volume", "ls").AssertNoOut(vID2)      // docker system prune --all --volume prune anonymous volume
 	base.Cmd("ps", "-a").AssertNoOut(tID)
 	base.Cmd("network", "ls").AssertNoOut(nID)
 	base.Cmd("images").AssertNoOut(testutil.ImageRepo(testutil.CommonImage))
@@ -75,7 +79,7 @@ func TestSystemPrune(t *testing.T) {
 
 	buildctlArgs := buildkitutil.BuildctlBaseArgs(host)
 	buildctlArgs = append(buildctlArgs, "du")
-	logrus.Debugf("running %s %v", buildctlBinary, buildctlArgs)
+	log.L.Debugf("running %s %v", buildctlBinary, buildctlArgs)
 	buildctlCmd := exec.Command(buildctlBinary, buildctlArgs...)
 	buildctlCmd.Env = os.Environ()
 	stdout := bytes.NewBuffer(nil)

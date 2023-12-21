@@ -19,6 +19,7 @@ package mountutil
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -26,12 +27,11 @@ import (
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/oci"
 	"github.com/containerd/containerd/pkg/userns"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/idgen"
 	"github.com/containerd/nerdctl/pkg/mountutil/volumestore"
 	"github.com/containerd/nerdctl/pkg/strutil"
 	"github.com/opencontainers/runtime-spec/specs-go"
-
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -49,7 +49,7 @@ type Processed struct {
 	Opts            []oci.SpecOpts
 }
 
-func ProcessFlagV(s string, volStore volumestore.VolumeStore) (*Processed, error) {
+func ProcessFlagV(s string, volStore volumestore.VolumeStore, createDir bool) (*Processed, error) {
 	var (
 		res      Processed
 		src, dst string
@@ -62,7 +62,7 @@ func ProcessFlagV(s string, volStore volumestore.VolumeStore) (*Processed, error
 	case 1:
 		dst = s
 		res.AnonymousVolume = idgen.GenerateID()
-		logrus.Debugf("creating anonymous volume %q, for %q", res.AnonymousVolume, s)
+		log.L.Debugf("creating anonymous volume %q, for %q", res.AnonymousVolume, s)
 		anonVol, err := volStore.Create(res.AnonymousVolume, []string{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create an anonymous volume %q: %w", res.AnonymousVolume, err)
@@ -91,13 +91,24 @@ func ProcessFlagV(s string, volStore volumestore.VolumeStore) (*Processed, error
 			res.Type = Volume
 		}
 		if !filepath.IsAbs(src) {
-			logrus.Warnf("expected an absolute path, got a relative path %q (allowed for nerdctl, but disallowed for Docker, so unrecommended)", src)
+			log.L.Warnf("expected an absolute path, got a relative path %q (allowed for nerdctl, but disallowed for Docker, so unrecommended)", src)
 			var err error
 			src, err = filepath.Abs(src)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get the absolute path of %q: %w", src, err)
 			}
 		}
+		if createDir {
+			if _, err := os.Stat(src); err != nil {
+				if !os.IsNotExist(err) {
+					return nil, fmt.Errorf("failed to stat %q: %w", src, err)
+				}
+				if err := os.MkdirAll(src, 0o755); err != nil {
+					return nil, fmt.Errorf("failed to mkdir %q: %w", src, err)
+				}
+			}
+		}
+
 		if !filepath.IsAbs(dst) {
 			return nil, fmt.Errorf("expected an absolute path, got %q", dst)
 		}

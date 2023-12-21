@@ -25,14 +25,15 @@ import (
 	"net"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/defaults"
 	"github.com/containerd/nerdctl/pkg/strutil"
 	"github.com/containerd/nerdctl/pkg/systemutil"
 	"github.com/mitchellh/mapstructure"
-	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 )
 
@@ -86,7 +87,7 @@ func (n *NetworkConfig) clean() error {
 	return nil
 }
 
-func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]interface{}, opts map[string]string) ([]CNIPlugin, error) {
+func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]interface{}, opts map[string]string, ipv6 bool) ([]CNIPlugin, error) {
 	var (
 		plugins []CNIPlugin
 		err     error
@@ -94,10 +95,16 @@ func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]
 	switch driver {
 	case "bridge":
 		mtu := 0
+		iPMasq := true
 		for opt, v := range opts {
 			switch opt {
 			case "mtu", "com.docker.network.driver.mtu":
 				mtu, err = ParseMTU(v)
+				if err != nil {
+					return nil, err
+				}
+			case "ip-masq", "com.docker.network.bridge.enable_ip_masquerade":
+				iPMasq, err = strconv.ParseBool(v)
 				if err != nil {
 					return nil, err
 				}
@@ -114,8 +121,11 @@ func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]
 		bridge.MTU = mtu
 		bridge.IPAM = ipam
 		bridge.IsGW = true
-		bridge.IPMasq = true
+		bridge.IPMasq = iPMasq
 		bridge.HairpinMode = true
+		if ipv6 {
+			bridge.Capabilities["ips"] = true
+		}
 		plugins = []CNIPlugin{bridge, newPortMapPlugin(), newFirewallPlugin(), newTuningPlugin()}
 		plugins = fixUpIsolation(e, name, plugins)
 	case "macvlan", "ipvlan":
@@ -153,6 +163,9 @@ func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]
 		vlan.Master = master
 		vlan.Mode = mode
 		vlan.IPAM = ipam
+		if ipv6 {
+			vlan.Capabilities["ips"] = true
+		}
 		plugins = []CNIPlugin{vlan}
 	default:
 		return nil, fmt.Errorf("unsupported cni driver %q", driver)
@@ -160,31 +173,30 @@ func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]
 	return plugins, nil
 }
 
-func (e *CNIEnv) generateIPAM(driver string, subnetStr, gatewayStr, ipRangeStr string, opts map[string]string) (map[string]interface{}, error) {
+func (e *CNIEnv) generateIPAM(driver string, subnets []string, gatewayStr, ipRangeStr string, opts map[string]string, ipv6 bool) (map[string]interface{}, error) {
 	var ipamConfig interface{}
 	switch driver {
 	case "default", "host-local":
-		subnet, err := e.parseSubnet(subnetStr)
-		if err != nil {
-			return nil, err
-		}
-		ipamRange, err := parseIPAMRange(subnet, gatewayStr, ipRangeStr)
-		if err != nil {
-			return nil, err
-		}
-
 		ipamConf := newHostLocalIPAMConfig()
 		ipamConf.Routes = []IPAMRoute{
 			{Dst: "0.0.0.0/0"},
 		}
-		ipamConf.Ranges = append(ipamConf.Ranges, []IPAMRange{*ipamRange})
+		ranges, findIPv4, err := e.parseIPAMRanges(subnets, gatewayStr, ipRangeStr, ipv6)
+		if err != nil {
+			return nil, err
+		}
+		ipamConf.Ranges = append(ipamConf.Ranges, ranges...)
+		if !findIPv4 {
+			ranges, _, _ = e.parseIPAMRanges([]string{""}, gatewayStr, ipRangeStr, ipv6)
+			ipamConf.Ranges = append(ipamConf.Ranges, ranges...)
+		}
 		ipamConfig = ipamConf
 	case "dhcp":
 		ipamConf := newDHCPIPAMConfig()
 		ipamConf.DaemonSocketPath = filepath.Join(defaults.CNIRuntimeDir(), "dhcp.sock")
 		// TODO: support IPAM options for dhcp
 		if err := systemutil.IsSocketAccessible(ipamConf.DaemonSocketPath); err != nil {
-			logrus.Warnf("cannot access dhcp socket %q (hint: try running with `dhcp daemon --socketpath=%s &` in CNI_PATH to launch the dhcp daemon)", ipamConf.DaemonSocketPath, ipamConf.DaemonSocketPath)
+			log.L.Warnf("cannot access dhcp socket %q (hint: try running with `dhcp daemon --socketpath=%s &` in CNI_PATH to launch the dhcp daemon)", ipamConf.DaemonSocketPath, ipamConf.DaemonSocketPath)
 		}
 		ipamConfig = ipamConf
 	default:
@@ -198,12 +210,36 @@ func (e *CNIEnv) generateIPAM(driver string, subnetStr, gatewayStr, ipRangeStr s
 	return ipam, nil
 }
 
+func (e *CNIEnv) parseIPAMRanges(subnets []string, gateway, ipRange string, ipv6 bool) ([][]IPAMRange, bool, error) {
+	findIPv4 := false
+	ranges := make([][]IPAMRange, 0, len(subnets))
+	for i := range subnets {
+		subnet, err := e.parseSubnet(subnets[i])
+		if err != nil {
+			return nil, findIPv4, err
+		}
+		// if ipv6 flag is not set, subnets of ipv6 should be excluded
+		if !ipv6 && subnet.IP.To4() == nil {
+			continue
+		}
+		if !findIPv4 && subnet.IP.To4() != nil {
+			findIPv4 = true
+		}
+		ipamRange, err := parseIPAMRange(subnet, gateway, ipRange)
+		if err != nil {
+			return nil, findIPv4, err
+		}
+		ranges = append(ranges, []IPAMRange{*ipamRange})
+	}
+	return ranges, findIPv4, nil
+}
+
 func fixUpIsolation(e *CNIEnv, name string, plugins []CNIPlugin) []CNIPlugin {
 	isolationPath := filepath.Join(e.Path, "isolation")
 	if _, err := exec.LookPath(isolationPath); err == nil {
 		// the warning is suppressed for DefaultNetworkName (because multi-bridge networking is not involved)
 		if name != DefaultNetworkName {
-			logrus.Warnf(`network %q: Using the deprecated CNI "isolation" plugin instead of CNI "firewall" plugin (>= 1.1.0) ingressPolicy.
+			log.L.Warnf(`network %q: Using the deprecated CNI "isolation" plugin instead of CNI "firewall" plugin (>= 1.1.0) ingressPolicy.
 To dismiss this warning, uninstall %q and install CNI "firewall" plugin (>= 1.1.0) from https://github.com/containernetworking/plugins`,
 				name, isolationPath)
 		}
@@ -211,7 +247,7 @@ To dismiss this warning, uninstall %q and install CNI "firewall" plugin (>= 1.1.
 		for _, f := range plugins {
 			if x, ok := f.(*firewallConfig); ok {
 				if name != DefaultNetworkName {
-					logrus.Warnf("network %q: Unsetting firewall ingressPolicy %q (because using the deprecated \"isolation\" plugin)", name, x.IngressPolicy)
+					log.L.Warnf("network %q: Unsetting firewall ingressPolicy %q (because using the deprecated \"isolation\" plugin)", name, x.IngressPolicy)
 				}
 				x.IngressPolicy = ""
 			}
@@ -220,10 +256,10 @@ To dismiss this warning, uninstall %q and install CNI "firewall" plugin (>= 1.1.
 		firewallPath := filepath.Join(e.Path, "firewall")
 		ok, err := firewallPluginGEQ110(firewallPath)
 		if err != nil {
-			logrus.WithError(err).Warnf("Failed to detect whether %q is newer than v1.1.0", firewallPath)
+			log.L.WithError(err).Warnf("Failed to detect whether %q is newer than v1.1.0", firewallPath)
 		}
 		if !ok {
-			logrus.Warnf("To isolate bridge networks, CNI plugin \"firewall\" (>= 1.1.0) needs to be installed in CNI_PATH (%q), see https://github.com/containernetworking/plugins",
+			log.L.Warnf("To isolate bridge networks, CNI plugin \"firewall\" (>= 1.1.0) needs to be installed in CNI_PATH (%q), see https://github.com/containernetworking/plugins",
 				e.Path)
 		}
 	}

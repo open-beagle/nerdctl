@@ -25,19 +25,18 @@ import (
 	"strings"
 
 	"github.com/containerd/containerd/errdefs"
+	"github.com/containerd/log"
 	"github.com/containerd/nerdctl/pkg/netutil"
-	"github.com/sirupsen/logrus"
 )
 
 // newUpdater creates an updater for hostsD (/var/lib/nerdctl/<ADDRHASH>/etchosts)
-func newUpdater(id, hostsD string, extraHosts map[string]string) *updater {
+func newUpdater(id, hostsD string) *updater {
 	u := &updater{
 		id:            id,
 		hostsD:        hostsD,
 		metaByIPStr:   make(map[string]*Meta),
 		nwNameByIPStr: make(map[string]string),
 		metaByDir:     make(map[string]*Meta),
-		extraHosts:    extraHosts,
 	}
 	return u
 }
@@ -49,7 +48,6 @@ type updater struct {
 	metaByIPStr   map[string]*Meta  // key: IP string
 	nwNameByIPStr map[string]string // key: IP string, value: key of Meta.Networks
 	metaByDir     map[string]*Meta  // key: "/var/lib/nerdctl/<ADDRHASH>/etchosts/<NS>/<ID>"
-	extraHosts    map[string]string // key: host value: IP string
 }
 
 // update updates the hostsD tree.
@@ -110,7 +108,7 @@ func (u *updater) phase2() error {
 		dir := filepath.Dir(path)
 		myMeta, ok := u.metaByDir[dir]
 		if !ok {
-			logrus.WithError(errdefs.ErrNotFound).Debugf("hostsstore metadata %q not found in %q?", metaJSON, dir)
+			log.L.WithError(errdefs.ErrNotFound).Debugf("hostsstore metadata %q not found in %q?", metaJSON, dir)
 			return nil
 		}
 		myNetworks := make(map[string]struct{})
@@ -127,7 +125,7 @@ func (u *updater) phase2() error {
 		var buf bytes.Buffer
 		if r != nil {
 			if err := parseHostsButSkipMarkedRegion(&buf, r); err != nil {
-				logrus.WithError(err).Warn("failed to read hosts file")
+				log.L.WithError(err).Warn("failed to read hosts file")
 			}
 		}
 
@@ -136,10 +134,8 @@ func (u *updater) phase2() error {
 		buf.WriteString("::1		localhost localhost.localdomain\n")
 
 		// keep extra hosts first
-		if u.id == myMeta.ID {
-			for host, ip := range u.extraHosts {
-				buf.WriteString(fmt.Sprintf("%-15s %s\n", ip, host))
-			}
+		for host, ip := range myMeta.ExtraHosts {
+			buf.WriteString(fmt.Sprintf("%-15s %s\n", ip, host))
 		}
 
 		for ip, nwName := range u.nwNameByIPStr {
