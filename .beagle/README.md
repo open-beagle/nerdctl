@@ -21,10 +21,7 @@ docker run -it \
 registry.cn-qingdao.aliyuncs.com/wod/golang:1.21 \
 rm -rf vendor && go mod vendor
 
-# patch vendor
-git apply .beagle/0001-support-loong64.patch
-
-# build
+# build cross
 docker run -it \
 --rm \
 -v $PWD/:/go/src/github.com/containerd/nerdctl \
@@ -32,7 +29,13 @@ docker run -it \
 registry.cn-qingdao.aliyuncs.com/wod/golang:1.21 \
 bash .beagle/build.sh
 
-git apply -R .beagle/0001-support-loong64.patch
+# build loong64
+docker run -it \
+--rm \
+-v $PWD/:/go/src/github.com/containerd/nerdctl \
+-w /go/src/github.com/containerd/nerdctl \
+registry.cn-qingdao.aliyuncs.com/wod/golang:1.21-loongnix \
+bash .beagle/build-loong64.sh
 
 # check
 file _output/linux/loong64/nerdctl

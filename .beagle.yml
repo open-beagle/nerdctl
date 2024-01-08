@@ -36,10 +36,15 @@ steps:
       proxy:
         from_secret: SOCKS5_PROXY
 
-  - name: golang
+  - name: golang-cross
     image: registry.cn-qingdao.aliyuncs.com/wod/golang:1.21
     commands:
       - bash .beagle/build.sh
+
+  - name: golang-loong64
+    image: registry.cn-qingdao.aliyuncs.com/wod/golang:1.21-loongnix
+    commands:
+      - bash .beagle/build-loong64.sh
 
   - name: docker-amd64
     image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker:1.0
