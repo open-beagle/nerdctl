@@ -30,7 +30,6 @@ import (
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/containers"
 	"github.com/containerd/containerd/oci"
-	"github.com/containerd/containerd/pkg/netns"
 	"github.com/containerd/nerdctl/pkg/api/types"
 	"github.com/containerd/nerdctl/pkg/clientutil"
 	"github.com/containerd/nerdctl/pkg/dnsutil/hostsstore"
@@ -128,7 +127,7 @@ func NewNetworkingOptionsManager(globalOptions types.GlobalCommandOptions, netOp
 	case nettype.Container:
 		manager = &containerNetworkManager{globalOptions, netOpts, client}
 	case nettype.CNI:
-		manager = &cniNetworkManager{globalOptions, netOpts, nil, client}
+		manager = &cniNetworkManager{globalOptions, netOpts, client, cniNetworkManagerPlatform{}}
 	default:
 		return nil, fmt.Errorf("unexpected container networking type: %q", netType)
 	}
@@ -398,15 +397,47 @@ func withDedupMounts(mountPath string, defaultSpec oci.SpecOpts) oci.SpecOpts {
 	}
 }
 
+func copyFileContent(src string, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	err = os.WriteFile(dst, data, 0644)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // ContainerNetworkingOpts Returns a slice of `oci.SpecOpts` and `containerd.NewContainerOpts` which represent
 // the network specs which need to be applied to the container with the given ID.
 func (m *hostNetworkManager) ContainerNetworkingOpts(_ context.Context, containerID string) ([]oci.SpecOpts, []containerd.NewContainerOpts, error) {
 
 	cOpts := []containerd.NewContainerOpts{}
+
+	dataStore, err := clientutil.DataStore(m.globalOptions.DataRoot, m.globalOptions.Address)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	stateDir, err := ContainerStateDirPath(m.globalOptions.Namespace, dataStore, containerID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resolvConfPath := filepath.Join(stateDir, "resolv.conf")
+	copyFileContent("/etc/resolv.conf", resolvConfPath)
+
+	etcHostsPath, err := hostsstore.AllocHostsFile(dataStore, m.globalOptions.Namespace, containerID)
+	if err != nil {
+		return nil, nil, err
+	}
+	copyFileContent("/etc/hosts", etcHostsPath)
+
 	specs := []oci.SpecOpts{
 		oci.WithHostNamespace(specs.NetworkNamespace),
-		withDedupMounts("/etc/hosts", oci.WithHostHostsFile),
-		withDedupMounts("/etc/resolv.conf", oci.WithHostResolvconf),
+		withDedupMounts("/etc/hosts", withCustomHosts(etcHostsPath)),
+		withDedupMounts("/etc/resolv.conf", withCustomResolvConf(resolvConfPath)),
 	}
 
 	// `/etc/hostname` does not exist on FreeBSD
@@ -439,8 +470,8 @@ func (m *hostNetworkManager) ContainerNetworkingOpts(_ context.Context, containe
 type cniNetworkManager struct {
 	globalOptions types.GlobalCommandOptions
 	netOpts       types.NetworkOptions
-	netNs         *netns.NetNS
 	client        *containerd.Client
+	cniNetworkManagerPlatform
 }
 
 // NetworkOptions Returns a copy of the internal types.NetworkOptions.
