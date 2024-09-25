@@ -54,6 +54,7 @@ docker run --rm \
   -e PLUGIN_SECRET_KEY=$PLUGIN_SECRET_KEY \
   -e DRONE_REPO_OWNER="open-beagle" \
   -e DRONE_REPO_NAME="nerdctl" \
+  -e DRONE_REPO_BRANCH="release-v1" \
   -e PLUGIN_MOUNT="./.git,./vendor" \
   -v $(pwd):$(pwd) \
   -w $(pwd) \
