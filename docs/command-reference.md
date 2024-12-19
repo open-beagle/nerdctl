@@ -1260,6 +1260,8 @@ This is an [experimental](./experimental.md) feature.
 
 :warning: This command currently doesn't use the host's `buildkitd` daemon but uses the patched version of BuildKit provided by buildg. This should be fixed in the future.
 
+:warning: This command is currently incompatible with `docker buildx debug`.
+
 Usage: `nerdctl builder debug PATH`
 
 Flags:
@@ -1389,6 +1391,7 @@ Flags:
 - :whale: `-p, --project-name`: Specify an alternate project name
 - :nerd_face: `--ipfs-address`: Multiaddr of IPFS API (default uses `$IPFS_PATH` env variable if defined or local directory `~/.ipfs`)
 - :whale: `--profile: Specify a profile to enable
+- :whale: `--env-file` : Specify an alternate environment file
 
 ### :whale: nerdctl compose up
 
@@ -1408,8 +1411,10 @@ Flags:
 - :whale: `--quiet-pull`: Pull without printing progress information
 - :whale: `--scale`: Scale SERVICE to NUM instances. Overrides the `scale` setting in the Compose file if present.
 - :whale: `--remove-orphans`: Remove containers for services not defined in the Compose file
+- :whale: `--force-recreate`: force Compose to stop and recreate all containers
+- :whale: `--no-recreate`: force Compose to reuse existing containers
 
-Unimplemented `docker-compose up` (V1) flags: `--no-deps`, `--force-recreate`, `--always-recreate-deps`, `--no-recreate`,
+Unimplemented `docker-compose up` (V1) flags: `--no-deps`, `--always-recreate-deps`,
 `--no-start`, `--abort-on-container-exit`, `--attach-dependencies`, `--timeout`, `--renew-anon-volumes`, `--exit-code-from`
 
 Unimplemented `docker compose up` (V2) flags: `--environment`

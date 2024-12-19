@@ -37,7 +37,7 @@ import (
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
-	gocni "github.com/containerd/go-cni"
+	"github.com/containerd/go-cni"
 	"github.com/containerd/log"
 
 	"github.com/containerd/nerdctl/v2/pkg/annotations"
@@ -218,7 +218,7 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 	// 1, nerdctl run --name demo -it imagename
 	// 2, ctrl + c to stop demo container
 	// 3, nerdctl start/restart demo
-	logConfig, err := generateLogConfig(dataStore, id, options.LogDriver, options.LogOpt, options.GOptions.Namespace)
+	logConfig, err := generateLogConfig(dataStore, id, options.LogDriver, options.LogOpt, options.GOptions.Namespace, options.GOptions.Address)
 	if err != nil {
 		return nil, generateRemoveStateDirFunc(ctx, id, internalLabels), err
 	}
@@ -646,7 +646,7 @@ type internalLabels struct {
 	networks   []string
 	ipAddress  string
 	ip6Address string
-	ports      []gocni.PortMapping
+	ports      []cni.PortMapping
 	macAddress string
 	// volume
 	mountPoints []*mountutil.Processed
@@ -819,12 +819,13 @@ func writeCIDFile(path, id string) error {
 }
 
 // generateLogConfig creates a LogConfig for the current container store
-func generateLogConfig(dataStore string, id string, logDriver string, logOpt []string, ns string) (logConfig logging.LogConfig, err error) {
+func generateLogConfig(dataStore string, id string, logDriver string, logOpt []string, ns, address string) (logConfig logging.LogConfig, err error) {
 	var u *url.URL
 	if u, err = url.Parse(logDriver); err == nil && u.Scheme != "" {
 		logConfig.LogURI = logDriver
 	} else {
 		logConfig.Driver = logDriver
+		logConfig.Address = address
 		logConfig.Opts, err = parseKVStringsMapFromLogOpt(logOpt, logDriver)
 		if err != nil {
 			return logConfig, err
@@ -834,7 +835,7 @@ func generateLogConfig(dataStore string, id string, logDriver string, logOpt []s
 			logConfigB    []byte
 			lu            *url.URL
 		)
-		logDriverInst, err = logging.GetDriver(logDriver, logConfig.Opts)
+		logDriverInst, err = logging.GetDriver(logDriver, logConfig.Opts, logConfig.Address)
 		if err != nil {
 			return logConfig, err
 		}

@@ -41,9 +41,18 @@ type LogsOptions struct {
 	Tail                 string
 	NoColor              bool
 	NoLogPrefix          bool
+	LatestRun            bool
 }
 
 func (c *Composer) Logs(ctx context.Context, lo LogsOptions, services []string) error {
+	// Whether we called `compose logs`, or we are showing logs at the end of `up`, while in non detach mode, we need
+	// to release the lock. At this point, no operation will be performed that needs exclusive locking anymore, and
+	// not releasing the lock would otherwise unduly prevent further compose operations.
+	// See https://github.com/containerd/nerdctl/issues/3678
+	if err := Unlock(); err != nil {
+		return err
+	}
+
 	var serviceNames []string
 	err := c.project.ForEachService(services, func(name string, svc *types.ServiceConfig) error {
 		serviceNames = append(serviceNames, svc.Name)
@@ -62,9 +71,10 @@ func (c *Composer) Logs(ctx context.Context, lo LogsOptions, services []string) 
 func (c *Composer) logs(ctx context.Context, containers []containerd.Container, lo LogsOptions) error {
 	var logTagMaxLen int
 	type containerState struct {
-		name   string
-		logTag string
-		logCmd *exec.Cmd
+		name      string
+		logTag    string
+		logCmd    *exec.Cmd
+		startedAt string
 	}
 
 	containerStates := make(map[string]containerState, len(containers)) // key: containerID
@@ -78,9 +88,15 @@ func (c *Composer) logs(ctx context.Context, containers []containerd.Container, 
 		if l := len(logTag); l > logTagMaxLen {
 			logTagMaxLen = l
 		}
+		ts, err := info.UpdatedAt.MarshalText()
+		if err != nil {
+			return err
+		}
+
 		containerStates[container.ID()] = containerState{
-			name:   name,
-			logTag: logTag,
+			name:      name,
+			logTag:    logTag,
+			startedAt: string(ts),
 		}
 	}
 
@@ -101,6 +117,9 @@ func (c *Composer) logs(ctx context.Context, containers []containerd.Container, 
 			} else {
 				args = append(args, lo.Tail)
 			}
+		}
+		if lo.LatestRun {
+			args = append(args, fmt.Sprintf("--since=%s", state.startedAt))
 		}
 
 		args = append(args, id)

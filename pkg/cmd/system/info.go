@@ -37,6 +37,7 @@ import (
 	"github.com/containerd/nerdctl/v2/pkg/infoutil"
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/dockercompat"
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/native"
+	"github.com/containerd/nerdctl/v2/pkg/logging"
 	"github.com/containerd/nerdctl/v2/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/v2/pkg/strutil"
 )
@@ -72,6 +73,7 @@ func Info(ctx context.Context, client *containerd.Client, options types.SystemIn
 		if err != nil {
 			return err
 		}
+		infoCompat.Plugins.Log = logging.Drivers()
 	default:
 		return fmt.Errorf("unknown mode %q", options.Mode)
 	}
@@ -154,7 +156,7 @@ func prettyPrintInfoDockerCompat(stdout io.Writer, stderr io.Writer, info *docke
 	// Storage Driver is not really Server concept for nerdctl, but mimics `docker info` output
 	fmt.Fprintf(w, " Storage Driver: %s\n", info.Driver)
 	fmt.Fprintf(w, " Logging Driver: %s\n", info.LoggingDriver)
-	printF(w, " Cgroup Driver:  ", info.CgroupDriver)
+	printF(w, " Cgroup Driver: ", info.CgroupDriver)
 	printF(w, " Cgroup Version: ", info.CgroupVersion)
 	fmt.Fprintf(w, " Plugins:\n")
 	fmt.Fprintf(w, "  Log:     %s\n", strings.Join(info.Plugins.Log, " "))
@@ -183,7 +185,7 @@ func printF(w io.Writer, label string, dockerCompatInfo string) {
 	if dockerCompatInfo == "" {
 		return
 	}
-	fmt.Fprintf(w, " %s: %s\n", label, dockerCompatInfo)
+	fmt.Fprintf(w, "%s%s\n", label, dockerCompatInfo)
 }
 
 func printSecurityOptions(w io.Writer, securityOptions []string) {
@@ -208,7 +210,7 @@ func printSecurityOptions(w io.Writer, securityOptions []string) {
 			if k == "name" {
 				continue
 			}
-			fmt.Fprintf(w, "   %s:\t%s\n", cases.Title(language.English).String(k), v)
+			fmt.Fprintf(w, "   %s: %s\n", cases.Title(language.English).String(k), v)
 		}
 	}
 }
