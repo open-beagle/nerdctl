@@ -7,7 +7,7 @@ git remote add upstream git@github.com:containerd/nerdctl.git
 
 git fetch upstream
 
-git merge v2.0.0
+git merge v2.0.2
 ```
 
 ## debug
@@ -26,7 +26,7 @@ docker run -it \
   --rm \
   -v $PWD/:/go/src/github.com/containerd/nerdctl \
   -w /go/src/github.com/containerd/nerdctl \
-  -e BUILD_VERSION=v2.0.0 \
+  -e BUILD_VERSION=v2.0.2 \
   registry.cn-qingdao.aliyuncs.com/wod/golang:1.22 \
   bash .beagle/build.sh
 
@@ -35,7 +35,7 @@ docker run -it \
   --rm \
   -v $PWD/:/go/src/github.com/containerd/nerdctl \
   -w /go/src/github.com/containerd/nerdctl \
-  -e BUILD_VERSION=v2.0.0 \
+  -e BUILD_VERSION=v2.0.2 \
   registry.cn-qingdao.aliyuncs.com/wod/golang:1.22-loongnix \
   bash .beagle/build-loong64.sh
 
