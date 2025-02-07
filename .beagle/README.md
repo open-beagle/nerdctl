@@ -7,7 +7,7 @@ git remote add upstream git@github.com:containerd/nerdctl.git
 
 git fetch upstream
 
-git merge v2.0.2
+git merge v2.0.3
 ```
 
 ## debug
@@ -18,7 +18,7 @@ docker run -it \
   --rm \
   -v $PWD/:/go/src/github.com/containerd/nerdctl \
   -w /go/src/github.com/containerd/nerdctl \
-  registry.cn-qingdao.aliyuncs.com/wod/golang:1.22 \
+  registry.cn-qingdao.aliyuncs.com/wod/golang:1.23 \
   rm -rf vendor && go mod vendor
 
 # build cross
@@ -26,8 +26,8 @@ docker run -it \
   --rm \
   -v $PWD/:/go/src/github.com/containerd/nerdctl \
   -w /go/src/github.com/containerd/nerdctl \
-  -e BUILD_VERSION=v2.0.2 \
-  registry.cn-qingdao.aliyuncs.com/wod/golang:1.22 \
+  -e BUILD_VERSION=v2.0.3 \
+  registry.cn-qingdao.aliyuncs.com/wod/golang:1.23 \
   bash .beagle/build.sh
 
 # build loong64
@@ -35,8 +35,8 @@ docker run -it \
   --rm \
   -v $PWD/:/go/src/github.com/containerd/nerdctl \
   -w /go/src/github.com/containerd/nerdctl \
-  -e BUILD_VERSION=v2.0.2 \
-  registry.cn-qingdao.aliyuncs.com/wod/golang:1.22-loongnix \
+  -e BUILD_VERSION=v2.0.3 \
+  registry.cn-qingdao.aliyuncs.com/wod/golang:1.23-loongnix \
   bash .beagle/build-loong64.sh
 
 # check

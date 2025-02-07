@@ -36,17 +36,17 @@ steps:
         from_secret: SOCKS5_PROXY
 
   - name: golang-cross
-    image: registry.cn-qingdao.aliyuncs.com/wod/golang:1.22
+    image: registry.cn-qingdao.aliyuncs.com/wod/golang:1.23
     environment:
-      BUILD_VERSION: v2.0.2
+      BUILD_VERSION: v2.0.3
     commands:
       - rm -rf vendor && go mod vendor
       - bash .beagle/build.sh
 
   - name: golang-loong64
-    image: registry.cn-qingdao.aliyuncs.com/wod/golang:1.22-loongnix
+    image: registry.cn-qingdao.aliyuncs.com/wod/golang:1.23-loongnix
     environment:
-      BUILD_VERSION: v2.0.2
+      BUILD_VERSION: v2.0.3
     commands:
       - bash .beagle/build-loong64.sh
 
@@ -59,7 +59,7 @@ steps:
       dockerfile: .beagle/dockerfile
       base: registry.cn-qingdao.aliyuncs.com/wod/alpine:3-amd64
       repo: wod/nerdctl
-      version: v2.0.2
+      version: v2.0.3
       channel: amd64
       args: "TARGETOS=linux,TARGETARCH=amd64"
       registry: registry.cn-qingdao.aliyuncs.com
@@ -77,7 +77,7 @@ steps:
       dockerfile: .beagle/dockerfile
       base: registry.cn-qingdao.aliyuncs.com/wod/alpine:3-arm64
       repo: wod/nerdctl
-      version: v2.0.2
+      version: v2.0.3
       channel: arm64
       args: "TARGETOS=linux,TARGETARCH=arm64"
       registry: registry.cn-qingdao.aliyuncs.com
@@ -95,7 +95,7 @@ steps:
       dockerfile: .beagle/dockerfile
       base: registry.cn-qingdao.aliyuncs.com/wod/alpine:3-amd64
       repo: wod/nerdctl
-      version: v2.0.2
+      version: v2.0.3
       channel: loong64
       args: "TARGETOS=linux,TARGETARCH=loong64"
       registry: registry.cn-qingdao.aliyuncs.com
@@ -108,8 +108,8 @@ steps:
     image: registry.cn-qingdao.aliyuncs.com/wod/devops-docker-manifest:1.0
     settings:
       platforms: linux/amd64,linux/arm64,linux/loong64
-      template: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v2.0.2-ARCH
-      target: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v2.0.2
+      template: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v2.0.3-ARCH
+      target: registry.cn-qingdao.aliyuncs.com/wod/nerdctl:v2.0.3
       username:
         from_secret: REGISTRY_USER_ALIYUN
       password:
