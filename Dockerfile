@@ -18,24 +18,24 @@
 # TODO: verify commit hash
 
 # Basic deps
-ARG CONTAINERD_VERSION=v2.0.0
-ARG RUNC_VERSION=v1.2.2
-ARG CNI_PLUGINS_VERSION=v1.6.1
+ARG CONTAINERD_VERSION=v2.0.2
+ARG RUNC_VERSION=v1.2.4
+ARG CNI_PLUGINS_VERSION=v1.6.2
 
 # Extra deps: Build
-ARG BUILDKIT_VERSION=v0.18.1
+ARG BUILDKIT_VERSION=v0.19.0
 # Extra deps: Lazy-pulling
-ARG STARGZ_SNAPSHOTTER_VERSION=v0.16.2
+ARG STARGZ_SNAPSHOTTER_VERSION=v0.16.3
 # Extra deps: Encryption
-ARG IMGCRYPT_VERSION=v2.0.0-rc.1
+ARG IMGCRYPT_VERSION=v2.0.0
 # Extra deps: Rootless
-ARG ROOTLESSKIT_VERSION=v2.3.1
+ARG ROOTLESSKIT_VERSION=v2.3.2
 ARG SLIRP4NETNS_VERSION=v1.3.1
 # Extra deps: bypass4netns
-ARG BYPASS4NETNS_VERSION=v0.4.1
+ARG BYPASS4NETNS_VERSION=v0.4.2
 # Extra deps: FUSE-OverlayFS
 ARG FUSE_OVERLAYFS_VERSION=v1.14
-ARG CONTAINERD_FUSE_OVERLAYFS_VERSION=v2.1.0
+ARG CONTAINERD_FUSE_OVERLAYFS_VERSION=v2.1.1
 # Extra deps: Init
 ARG TINI_VERSION=v0.19.0
 # Extra deps: Debug
@@ -50,25 +50,25 @@ ARG NYDUS_VERSION=v2.3.0
 ARG SOCI_SNAPSHOTTER_VERSION=0.8.0
 ARG KUBO_VERSION=v0.31.0
 
-FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.6.0 AS xx
+FROM --platform=$BUILDPLATFORM tonistiigi/xx:1.6.1 AS xx
 
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm AS build-base-debian
 COPY --from=xx / /
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && apt-get install -qq --no-install-recommends \
-    git \
-    dpkg-dev
+  git \
+  dpkg-dev
 ARG TARGETARCH
 # libbtrfs: for containerd
 # libseccomp: for runc and bypass4netns
 RUN xx-apt-get update -qq && xx-apt-get install -qq --no-install-recommends \
-    binutils \
-    gcc \
-    libc6-dev \
-    libbtrfs-dev \
-    libseccomp-dev \
-    pkg-config
+  binutils \
+  gcc \
+  libc6-dev \
+  libbtrfs-dev \
+  libseccomp-dev \
+  pkg-config
 RUN git config --global advice.detachedHead false
 
 FROM build-base-debian AS build-containerd
@@ -246,12 +246,12 @@ COPY --from=build-full /out /
 FROM ubuntu:${UBUNTU_VERSION} AS base
 # fuse3 is required by stargz snapshotter
 RUN apt-get update -qq && apt-get install -qq -y --no-install-recommends \
-    apparmor \
-    bash-completion \
-    ca-certificates curl \
-    iproute2 iptables \
-    dbus dbus-user-session systemd systemd-sysv \
-    fuse3
+  apparmor \
+  bash-completion \
+  ca-certificates curl \
+  iproute2 iptables \
+  dbus dbus-user-session systemd systemd-sysv \
+  fuse3
 ARG CONTAINERIZED_SYSTEMD_VERSION
 RUN curl -o /docker-entrypoint.sh -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/AkihiroSuda/containerized-systemd/${CONTAINERIZED_SYSTEMD_VERSION}/docker-entrypoint.sh && \
   chmod +x /docker-entrypoint.sh
@@ -278,9 +278,9 @@ FROM base AS test-integration
 ARG DEBIAN_FRONTEND=noninteractive
 # `expect` package contains `unbuffer(1)`, which is used for emulating TTY for testing
 RUN apt-get update -qq && apt-get install -qq --no-install-recommends \
-    expect \
-    git \
-    make
+  expect \
+  git \
+  make
 COPY --from=goversion /GOVERSION /GOVERSION
 ARG TARGETARCH
 RUN curl -fsSL --proto '=https' --tlsv1.2 https://golang.org/dl/$(cat /GOVERSION).linux-${TARGETARCH:-amd64}.tar.gz | tar xzvC /usr/local
@@ -325,9 +325,9 @@ FROM test-integration AS test-integration-rootless
 # (`sudo` does not work for this purpose,
 #  OTOH `machinectl shell` can create the session but does not propagate exit code)
 RUN apt-get update -qq && apt-get install -qq --no-install-recommends \
-    uidmap \
-    openssh-server \
-    openssh-client
+  uidmap \
+  openssh-server \
+  openssh-client
 # TODO: update containerized-systemd to enable sshd by default, or allow `systemctl wants <TARGET> ssh` here
 RUN ssh-keygen -q -t rsa -f /root/.ssh/id_rsa -N '' && \
   useradd -m -s /bin/bash rootless && \
