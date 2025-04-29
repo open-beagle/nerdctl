@@ -1,6 +1,7 @@
 module github.com/containerd/nerdctl/v2
 
 go 1.22.7
+toolchain go1.23.7
 
 // FIXME:
 // github.com/docker/docker/pkg/sysinfo has been replaced by a fork kept under ./pkg2/sysinfo
@@ -65,12 +66,12 @@ require (
 	github.com/vishvananda/netns v0.0.5
 	github.com/yuchanns/srslog v1.1.0
 	go.uber.org/mock v0.5.0
-	golang.org/x/crypto v0.32.0
-	golang.org/x/net v0.34.0
-	golang.org/x/sync v0.10.0
-	golang.org/x/sys v0.29.0
-	golang.org/x/term v0.28.0
-	golang.org/x/text v0.21.0
+	golang.org/x/crypto v0.36.0
+	golang.org/x/net v0.37.0
+	golang.org/x/sync v0.12.0
+	golang.org/x/sys v0.31.0
+	golang.org/x/term v0.30.0
+	golang.org/x/text v0.23.0
 	gopkg.in/yaml.v3 v3.0.1
 	gotest.tools/v3 v3.5.1
 )
