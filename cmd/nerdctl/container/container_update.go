@@ -38,7 +38,7 @@ import (
 	"github.com/containerd/nerdctl/v2/cmd/nerdctl/helpers"
 	"github.com/containerd/nerdctl/v2/pkg/api/types"
 	"github.com/containerd/nerdctl/v2/pkg/clientutil"
-	nerdctlContainer "github.com/containerd/nerdctl/v2/pkg/cmd/container"
+	nerdctlcontainer "github.com/containerd/nerdctl/v2/pkg/cmd/container"
 	"github.com/containerd/nerdctl/v2/pkg/formatter"
 	"github.com/containerd/nerdctl/v2/pkg/idutil/containerwalker"
 	"github.com/containerd/nerdctl/v2/pkg/infoutil"
@@ -57,8 +57,8 @@ type updateResourceOptions struct {
 	BlkioWeight        uint16
 }
 
-func NewUpdateCommand() *cobra.Command {
-	var updateCommand = &cobra.Command{
+func UpdateCommand() *cobra.Command {
+	var cmd = &cobra.Command{
 		Use:               "update [flags] CONTAINER [CONTAINER, ...]",
 		Args:              cobra.MinimumNArgs(1),
 		Short:             "Update one or more running containers",
@@ -67,9 +67,9 @@ func NewUpdateCommand() *cobra.Command {
 		SilenceUsage:      true,
 		SilenceErrors:     true,
 	}
-	updateCommand.Flags().SetInterspersed(false)
-	setUpdateFlags(updateCommand)
-	return updateCommand
+	cmd.Flags().SetInterspersed(false)
+	setUpdateFlags(cmd)
+	return cmd
 }
 
 func setUpdateFlags(cmd *cobra.Command) {
@@ -358,7 +358,7 @@ func updateContainer(ctx context.Context, client *containerd.Client, id string, 
 		return err
 	}
 	if cmd.Flags().Changed("restart") && restart != "" {
-		if err := nerdctlContainer.UpdateContainerRestartPolicyLabel(ctx, client, container, restart); err != nil {
+		if err := nerdctlcontainer.UpdateContainerRestartPolicyLabel(ctx, client, container, restart); err != nil {
 			return err
 		}
 	}

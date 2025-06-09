@@ -114,6 +114,10 @@ type ContainerCreateOptions struct {
 	CPUSetCPUs string
 	// CPUSetMems specifies the memory nodes (MEMs) in which to allow execution (0-3, 0,1). Only effective on NUMA systems.
 	CPUSetMems string
+	// Limit CPU real-time period in microseconds
+	CPURealtimePeriod uint64
+	// Limit CPU real-time runtime in microseconds
+	CPURealtimeRuntime uint64
 	// Memory specifies the memory limit
 	Memory string
 	// MemoryReservationChanged specifies whether the memory soft limit has been changed
@@ -140,14 +144,27 @@ type ContainerCreateOptions struct {
 	PidsLimit int64
 	// CgroupConf specifies to configure cgroup v2 (key=value)
 	CgroupConf []string
-	// BlkioWeight specifies the block IO (relative weight), between 10 and 1000, or 0 to disable (default 0)
-	BlkioWeight uint16
 	// Cgroupns specifies the cgroup namespace to use
 	Cgroupns string
 	// CgroupParent specifies the optional parent cgroup for the container
 	CgroupParent string
 	// Device specifies add a host device to the container
 	Device []string
+	// #endregion
+
+	// #region for blkio related flags
+	// BlkioWeight specifies the block IO (relative weight), between 10 and 1000, or 0 to disable (default 0)
+	BlkioWeight uint16
+	// BlkioWeightDevice specifies the Block IO weight (relative device weight)
+	BlkioWeightDevice []string
+	// BlkioDeviceReadBps specifies the Block IO read rate limit(bytes per second) of a device
+	BlkioDeviceReadBps []string
+	// BlkioDeviceWriteBps specifies the Block IO write rate limit(bytes per second) of a device
+	BlkioDeviceWriteBps []string
+	// BlkioDeviceReadIOps specifies the Block IO read rate limit(IO per second) of a device
+	BlkioDeviceReadIOps []string
+	// BlkioDeviceWriteIOps specifies the Block IO read rate limit(IO per second) of a device
+	BlkioDeviceWriteIOps []string
 	// #endregion
 
 	// #region for intel RDT flags
@@ -275,6 +292,9 @@ type ContainerStopOptions struct {
 	// Timeout specifies how long to wait after sending a SIGTERM and before sending a SIGKILL.
 	// If it's nil, the default is 10 seconds.
 	Timeout *time.Duration
+
+	// Signal to send to the container, before sending SIGKILL
+	Signal string
 }
 
 // ContainerRestartOptions specifies options for `nerdctl (container) restart`.
@@ -283,6 +303,8 @@ type ContainerRestartOptions struct {
 	GOption GlobalCommandOptions
 	// Time to wait after sending a SIGTERM and before sending a SIGKILL.
 	Timeout *time.Duration
+	// Signal to send to stop the container, before sending SIGKILL
+	Signal string
 }
 
 // ContainerPauseOptions specifies options for `nerdctl (container) pause`.
@@ -325,6 +347,9 @@ type ContainerTopOptions struct {
 	Stdout io.Writer
 	// GOptions is the global options
 	GOptions GlobalCommandOptions
+
+	// Arguments to pass through to the ps command
+	PsArgs string
 }
 
 // ContainerInspectOptions specifies options for `nerdctl container inspect`
@@ -379,6 +404,8 @@ type ContainerLogsOptions struct {
 	Since string
 	// Show logs before a timestamp (e.g., 2013-01-02T13:23:37Z) or relative (e.g., 42m for 42 minutes).
 	Until string
+	// Details specifies whether to show extra details provided to logs
+	Details bool
 }
 
 // ContainerWaitOptions specifies options for `nerdctl (container) wait`.

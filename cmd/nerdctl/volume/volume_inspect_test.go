@@ -18,7 +18,6 @@ package volume
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -28,10 +27,13 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/containerd/errdefs"
+	"github.com/containerd/nerdctl/mod/tigron/expect"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/tig"
 
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/native"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 func createFileWithSize(mountPoint string, size int64) error {
@@ -63,8 +65,8 @@ func TestVolumeInspect(t *testing.T) {
 		vol := nerdtest.InspectVolume(helpers, data.Identifier("first"))
 		err := createFileWithSize(vol.Mountpoint, size)
 		assert.NilError(t, err, "File creation failed")
-		data.Set("vol1", data.Identifier("first"))
-		data.Set("vol2", data.Identifier("second"))
+		data.Labels().Set("vol1", data.Identifier("first"))
+		data.Labels().Set("vol2", data.Identifier("second"))
 	}
 
 	testCase.Cleanup = func(data test.Data, helpers test.Helpers) {
@@ -91,21 +93,17 @@ func TestVolumeInspect(t *testing.T) {
 		{
 			Description: "success",
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-				return helpers.Command("volume", "inspect", data.Get("vol1"))
+				return helpers.Command("volume", "inspect", data.Labels().Get("vol1"))
 			},
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					Output: test.All(
-						test.Contains(data.Get("vol1")),
-						func(stdout string, info string, t *testing.T) {
-							var dc []native.Volume
-							if err := json.Unmarshal([]byte(stdout), &dc); err != nil {
-								t.Fatal(err)
-							}
+					Output: expect.All(
+						expect.Contains(data.Labels().Get("vol1")),
+						expect.JSON([]native.Volume{}, func(dc []native.Volume, info string, t tig.T) {
 							assert.Assert(t, len(dc) == 1, fmt.Sprintf("one result, not %d", len(dc))+info)
-							assert.Assert(t, dc[0].Name == data.Get("vol1"), fmt.Sprintf("expected name to be %q (was %q)", data.Get("vol1"), dc[0].Name)+info)
+							assert.Assert(t, dc[0].Name == data.Labels().Get("vol1"), fmt.Sprintf("expected name to be %q (was %q)", data.Labels().Get("vol1"), dc[0].Name)+info)
 							assert.Assert(t, dc[0].Labels == nil, fmt.Sprintf("expected labels to be nil and were %v", dc[0].Labels)+info)
-						},
+						}),
 					),
 				}
 			},
@@ -113,43 +111,35 @@ func TestVolumeInspect(t *testing.T) {
 		{
 			Description: "inspect labels",
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-				return helpers.Command("volume", "inspect", data.Get("vol2"))
+				return helpers.Command("volume", "inspect", data.Labels().Get("vol2"))
 			},
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					Output: test.All(
-						test.Contains(data.Get("vol2")),
-						func(stdout string, info string, t *testing.T) {
-							var dc []native.Volume
-							if err := json.Unmarshal([]byte(stdout), &dc); err != nil {
-								t.Fatal(err)
-							}
+					Output: expect.All(
+						expect.Contains(data.Labels().Get("vol2")),
+						expect.JSON([]native.Volume{}, func(dc []native.Volume, info string, t tig.T) {
 							labels := *dc[0].Labels
 							assert.Assert(t, len(labels) == 2, fmt.Sprintf("two results, not %d", len(labels)))
 							assert.Assert(t, labels["foo"] == "fooval", fmt.Sprintf("label foo should be fooval, not %s", labels["foo"]))
 							assert.Assert(t, labels["bar"] == "barval", fmt.Sprintf("label bar should be barval, not %s", labels["bar"]))
-						},
+						}),
 					),
 				}
 			},
 		},
 		{
 			Description: "inspect size",
-			Require:     test.Not(nerdtest.Docker),
+			Require:     require.Not(nerdtest.Docker),
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-				return helpers.Command("volume", "inspect", "--size", data.Get("vol1"))
+				return helpers.Command("volume", "inspect", "--size", data.Labels().Get("vol1"))
 			},
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					Output: test.All(
-						test.Contains(data.Get("vol1")),
-						func(stdout string, info string, t *testing.T) {
-							var dc []native.Volume
-							if err := json.Unmarshal([]byte(stdout), &dc); err != nil {
-								t.Fatal(err)
-							}
+					Output: expect.All(
+						expect.Contains(data.Labels().Get("vol1")),
+						expect.JSON([]native.Volume{}, func(dc []native.Volume, info string, t tig.T) {
 							assert.Assert(t, dc[0].Size == size, fmt.Sprintf("expected size to be %d (was %d)", size, dc[0].Size))
-						},
+						}),
 					),
 				}
 			},
@@ -157,22 +147,17 @@ func TestVolumeInspect(t *testing.T) {
 		{
 			Description: "multi success",
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-				return helpers.Command("volume", "inspect", data.Get("vol1"), data.Get("vol2"))
+				return helpers.Command("volume", "inspect", data.Labels().Get("vol1"), data.Labels().Get("vol2"))
 			},
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					Output: test.All(
-						test.Contains(data.Get("vol1")),
-						test.Contains(data.Get("vol2")),
-						func(stdout string, info string, t *testing.T) {
-							var dc []native.Volume
-							if err := json.Unmarshal([]byte(stdout), &dc); err != nil {
-								t.Fatal(err)
-							}
+					Output: expect.All(
+						expect.Contains(data.Labels().Get("vol1"), data.Labels().Get("vol2")),
+						expect.JSON([]native.Volume{}, func(dc []native.Volume, info string, t tig.T) {
 							assert.Assert(t, len(dc) == 2, fmt.Sprintf("two results, not %d", len(dc)))
-							assert.Assert(t, dc[0].Name == data.Get("vol1"), fmt.Sprintf("expected name to be %q (was %q)", data.Get("vol1"), dc[0].Name))
-							assert.Assert(t, dc[1].Name == data.Get("vol2"), fmt.Sprintf("expected name to be %q (was %q)", data.Get("vol2"), dc[1].Name))
-						},
+							assert.Assert(t, dc[0].Name == data.Labels().Get("vol1"), fmt.Sprintf("expected name to be %q (was %q)", data.Labels().Get("vol1"), dc[0].Name))
+							assert.Assert(t, dc[1].Name == data.Labels().Get("vol2"), fmt.Sprintf("expected name to be %q (was %q)", data.Labels().Get("vol2"), dc[1].Name))
+						}),
 					),
 				}
 			},
@@ -180,22 +165,18 @@ func TestVolumeInspect(t *testing.T) {
 		{
 			Description: "part success multi",
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-				return helpers.Command("volume", "inspect", "invalid∞", "nonexistent", data.Get("vol1"))
+				return helpers.Command("volume", "inspect", "invalid∞", "nonexistent", data.Labels().Get("vol1"))
 			},
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
 					ExitCode: 1,
 					Errors:   []error{errdefs.ErrNotFound, errdefs.ErrInvalidArgument},
-					Output: test.All(
-						test.Contains(data.Get("vol1")),
-						func(stdout string, info string, t *testing.T) {
-							var dc []native.Volume
-							if err := json.Unmarshal([]byte(stdout), &dc); err != nil {
-								t.Fatal(err)
-							}
+					Output: expect.All(
+						expect.Contains(data.Labels().Get("vol1")),
+						expect.JSON([]native.Volume{}, func(dc []native.Volume, info string, t tig.T) {
 							assert.Assert(t, len(dc) == 1, fmt.Sprintf("one result, not %d", len(dc)))
-							assert.Assert(t, dc[0].Name == data.Get("vol1"), fmt.Sprintf("expected name to be %q (was %q)", data.Get("vol1"), dc[0].Name))
-						},
+							assert.Assert(t, dc[0].Name == data.Labels().Get("vol1"), fmt.Sprintf("expected name to be %q (was %q)", data.Labels().Get("vol1"), dc[0].Name))
+						}),
 					),
 				}
 			},

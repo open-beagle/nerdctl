@@ -17,21 +17,27 @@
 package container
 
 import (
-	"runtime"
 	"testing"
 
-	"github.com/containerd/nerdctl/v2/cmd/nerdctl/helpers"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
+	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
 )
 
 func TestRunStargz(t *testing.T) {
-	testutil.DockerIncompatible(t)
-	if runtime.GOARCH != "amd64" {
-		t.Skip("skipping test as FedoraESGZImage is amd64 only")
-	}
+	testCase := nerdtest.Setup()
 
-	base := testutil.NewBase(t)
-	helpers.RequiresStargz(base)
-	// if stargz snapshotter is functional, "/.stargz-snapshotter" appears
-	base.Cmd("--snapshotter=stargz", "run", "--rm", testutil.FedoraESGZImage, "ls", "/.stargz-snapshotter").AssertOK()
+	testCase.Require = require.All(
+		nerdtest.Stargz,
+		require.Amd64,
+		require.Not(nerdtest.Docker),
+	)
+
+	testCase.Command = test.Command("--snapshotter=stargz", "run", "--quiet", "--rm", testutil.FedoraESGZImage, "ls", "/.stargz-snapshotter")
+
+	testCase.Expected = test.Expects(0, nil, nil)
+
+	testCase.Run(t)
 }

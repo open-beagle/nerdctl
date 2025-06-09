@@ -26,12 +26,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	dockercliopts "github.com/docker/cli/opts"
 	dockeropts "github.com/docker/docker/opts"
 	"github.com/moby/sys/signal"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/term"
 
 	"github.com/containerd/console"
 	containerd "github.com/containerd/containerd/v2/client"
@@ -85,10 +87,6 @@ func PrintHostPort(ctx context.Context, writer io.Writer, container containerd.C
 
 // ContainerStatus returns the container's status from its task.
 func ContainerStatus(ctx context.Context, c containerd.Container) (containerd.Status, error) {
-	// Just in case, there is something wrong in server.
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
 	task, err := c.Task(ctx, nil)
 	if err != nil {
 		return containerd.Status{}, err
@@ -251,7 +249,7 @@ func Start(ctx context.Context, container containerd.Container, flagA bool, clie
 			return err
 		}
 		defer con.Reset()
-		if err := con.SetRaw(); err != nil {
+		if _, err := term.MakeRaw(int(con.Fd())); err != nil {
 			return err
 		}
 	}
@@ -336,7 +334,7 @@ func Start(ctx context.Context, container containerd.Container, flagA bool, clie
 }
 
 // Stop stops `container` by sending SIGTERM. If the container is not stopped after `timeout`, it sends a SIGKILL.
-func Stop(ctx context.Context, container containerd.Container, timeout *time.Duration) (err error) {
+func Stop(ctx context.Context, container containerd.Container, timeout *time.Duration, signalValue string) (err error) {
 	// defer the storage of stop error in the dedicated label
 	defer func() {
 		if err != nil {
@@ -409,15 +407,9 @@ func Stop(ctx context.Context, container containerd.Container, timeout *time.Dur
 	}
 
 	if *timeout > 0 {
-		sig, err := signal.ParseSignal("SIGTERM")
+		sig, err := getSignal(signalValue, l)
 		if err != nil {
 			return err
-		}
-		if stopSignal, ok := l[containerd.StopSignalLabel]; ok {
-			sig, err = signal.ParseSignal(stopSignal)
-			if err != nil {
-				return err
-			}
 		}
 
 		if err := task.Kill(ctx, sig); err != nil {
@@ -463,6 +455,18 @@ func Stop(ctx context.Context, container containerd.Container, timeout *time.Dur
 		}
 	}
 	return waitContainerStop(ctx, exitCh, container.ID())
+}
+
+func getSignal(signalValue string, containerLabels map[string]string) (syscall.Signal, error) {
+	if signalValue != "" {
+		return signal.ParseSignal(signalValue)
+	}
+
+	if stopSignal, ok := containerLabels[containerd.StopSignalLabel]; ok {
+		return signal.ParseSignal(stopSignal)
+	}
+
+	return signal.ParseSignal("SIGTERM")
 }
 
 func waitContainerStop(ctx context.Context, exitCh <-chan containerd.ExitStatus, id string) error {

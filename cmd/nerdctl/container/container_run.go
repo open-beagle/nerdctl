@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/containerd/console"
 	"github.com/containerd/log"
@@ -47,7 +48,7 @@ const (
 	tiniInitBinary = "tini"
 )
 
-func NewRunCommand() *cobra.Command {
+func RunCommand() *cobra.Command {
 	shortHelp := "Run a command in a new container. Optionally specify \"ipfs://\" or \"ipns://\" scheme to pull image from IPFS."
 	longHelp := shortHelp
 	switch runtime.GOOS {
@@ -58,7 +59,7 @@ func NewRunCommand() *cobra.Command {
 		longHelp += "\n"
 		longHelp += "WARNING: `nerdctl run` is experimental on FreeBSD and currently requires `--net=none` (https://github.com/containerd/nerdctl/blob/main/docs/freebsd.md)"
 	}
-	var runCommand = &cobra.Command{
+	var cmd = &cobra.Command{
 		Use:               "run [flags] IMAGE [COMMAND] [ARG...]",
 		Args:              cobra.MinimumNArgs(1),
 		Short:             shortHelp,
@@ -69,13 +70,13 @@ func NewRunCommand() *cobra.Command {
 		SilenceErrors:     true,
 	}
 
-	runCommand.Flags().SetInterspersed(false)
-	setCreateFlags(runCommand)
+	cmd.Flags().SetInterspersed(false)
+	setCreateFlags(cmd)
 
-	runCommand.Flags().BoolP("detach", "d", false, "Run container in background and print container ID")
-	runCommand.Flags().StringSliceP("attach", "a", []string{}, "Attach STDIN, STDOUT, or STDERR")
+	cmd.Flags().BoolP("detach", "d", false, "Run container in background and print container ID")
+	cmd.Flags().StringSliceP("attach", "a", []string{}, "Attach STDIN, STDOUT, or STDERR")
 
-	return runCommand
+	return cmd
 }
 
 func setCreateFlags(cmd *cobra.Command) {
@@ -131,6 +132,7 @@ func setCreateFlags(cmd *cobra.Command) {
 	cmd.Flags().String("ip", "", "IPv4 address to assign to the container")
 	cmd.Flags().String("ip6", "", "IPv6 address to assign to the container")
 	cmd.Flags().StringP("hostname", "h", "", "Container host name")
+	cmd.Flags().String("domainname", "", "Container domain name")
 	cmd.Flags().String("mac-address", "", "MAC address to assign to the container")
 	// #endregion
 
@@ -154,7 +156,6 @@ func setCreateFlags(cmd *cobra.Command) {
 	})
 	cmd.Flags().Int64("pids-limit", -1, "Tune container pids limit (set -1 for unlimited)")
 	cmd.Flags().StringSlice("cgroup-conf", nil, "Configure cgroup v2 (key=value)")
-	cmd.Flags().Uint16("blkio-weight", 0, "Block IO (relative weight), between 10 and 1000, or 0 to disable (default 0)")
 	cmd.Flags().String("cgroupns", defaults.CgroupnsMode(), `Cgroup namespace to use, the default depends on the cgroup version ("host"|"private")`)
 	cmd.Flags().String("cgroup-parent", "", "Optional parent cgroup for the container")
 	cmd.RegisterFlagCompletionFunc("cgroupns", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
@@ -165,11 +166,22 @@ func setCreateFlags(cmd *cobra.Command) {
 	cmd.Flags().Uint64("cpu-shares", 0, "CPU shares (relative weight)")
 	cmd.Flags().Int64("cpu-quota", -1, "Limit CPU CFS (Completely Fair Scheduler) quota")
 	cmd.Flags().Uint64("cpu-period", 0, "Limit CPU CFS (Completely Fair Scheduler) period")
+	cmd.Flags().Uint64("cpu-rt-period", 0, "Limit CPU real-time period in microseconds")
+	cmd.Flags().Uint64("cpu-rt-runtime", 0, "Limit CPU real-time runtime in microseconds")
 	// device is defined as StringSlice, not StringArray, to allow specifying "--device=DEV1,DEV2" (compatible with Podman)
 	cmd.Flags().StringSlice("device", nil, "Add a host device to the container")
 	// ulimit is defined as StringSlice, not StringArray, to allow specifying "--ulimit=ULIMIT1,ULIMIT2" (compatible with Podman)
 	cmd.Flags().StringSlice("ulimit", nil, "Ulimit options")
 	cmd.Flags().String("rdt-class", "", "Name of the RDT class (or CLOS) to associate the container with")
+	// #endregion
+
+	// #region blkio flags
+	cmd.Flags().Uint16("blkio-weight", 0, "Block IO (relative weight), between 10 and 1000, or 0 to disable (default 0)")
+	cmd.Flags().StringArray("blkio-weight-device", []string{}, "Block IO weight (relative device weight) (default [])")
+	cmd.Flags().StringArray("device-read-bps", []string{}, "Limit read rate (bytes per second) from a device (default [])")
+	cmd.Flags().StringArray("device-read-iops", []string{}, "Limit read rate (IO per second) from a device (default [])")
+	cmd.Flags().StringArray("device-write-bps", []string{}, "Limit write rate (bytes per second) to a device (default [])")
+	cmd.Flags().StringArray("device-write-iops", []string{}, "Limit write rate (IO per second) to a device (default [])")
 	// #endregion
 
 	// user flags
@@ -288,7 +300,7 @@ func setCreateFlags(cmd *cobra.Command) {
 }
 
 func processCreateCommandFlagsInRun(cmd *cobra.Command) (types.ContainerCreateOptions, error) {
-	opt, err := processContainerCreateOptions(cmd)
+	opt, err := createOptions(cmd)
 	if err != nil {
 		return opt, err
 	}
@@ -357,7 +369,7 @@ func runAction(cmd *cobra.Command, args []string) error {
 
 	netFlags, err := loadNetworkFlags(cmd)
 	if err != nil {
-		return fmt.Errorf("failed to load networking flags: %s", err)
+		return fmt.Errorf("failed to load networking flags: %w", err)
 	}
 
 	netManager, err := containerutil.NewNetworkingOptionsManager(createOpt.GOptions, netFlags, client)
@@ -385,9 +397,6 @@ func runAction(cmd *cobra.Command, args []string) error {
 			if isDetached {
 				return
 			}
-			if err := netManager.CleanupNetworking(ctx, c); err != nil {
-				log.L.Warnf("failed to clean up container networking: %s", err)
-			}
 			if err := container.RemoveContainer(ctx, c, createOpt.GOptions, true, true, client); err != nil {
 				log.L.WithError(err).Warnf("failed to remove container %s", id)
 			}
@@ -401,7 +410,7 @@ func runAction(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		defer con.Reset()
-		if err := con.SetRaw(); err != nil {
+		if _, err := term.MakeRaw(int(con.Fd())); err != nil {
 			return err
 		}
 	}

@@ -186,6 +186,7 @@ Network flags:
 - :whale: `--dns-search`: Set custom DNS search domains
 - :whale: `--dns-opt, --dns-option`: Set DNS options
 - :whale: `-h, --hostname`: Container host name
+- :whale: `--domainname`: Container domain name
 - :whale: `--add-host`: Add a custom host-to-IP mapping (host:ip). `ip` could be a special string `host-gateway`,
 - which will be resolved to the `host-gateway-ip` in nerdctl.toml or global flag.
 - :whale: `--ip`: Specific static IP address(es) to use. Note that unlike docker, nerdctl allows specifying it with the default bridge network.
@@ -202,6 +203,8 @@ Resource flags:
 - :whale: `--cpu-shares`: CPU shares (relative weight)
 - :whale: `--cpuset-cpus`: CPUs in which to allow execution (0-3, 0,1)
 - :whale: `--cpuset-mems`: Memory nodes (MEMs) in which to allow execution (0-3, 0,1). Only effective on NUMA systems
+- :whale: `--cpu-rt-period`: Limit CPU real-time period in microseconds. Only supported with cgroup v1.
+- :whale: `--cpu-rt-runtime`: Limit CPU real-time runtime in microseconds. Only supported with cgroup v1.
 - :whale: `--memory`: Memory limit
 - :whale: `--memory-reservation`: Memory soft limit
 - :whale: `--memory-swap`: Swap limit equal to memory plus swap: '-1' to enable unlimited swap
@@ -212,6 +215,11 @@ Resource flags:
 - :whale: `--pids-limit`: Tune container pids limit
 - :nerd_face: `--cgroup-conf`: Configure cgroup v2 (key=value)
 - :whale: `--blkio-weight`: Block IO (relative weight), between 10 and 1000, or 0 to disable (default 0)
+- :whale: `--blkio-weight-device`: Block IO weight (relative device weight)
+- :whale: `--device-read-bps`: Limit read rate (bytes per second) from a device
+- :whale: `--device-read-iops`: Limit read rate (IO per second) from a device
+- :whale: `--device-write-bps`: Limit write rate (bytes per second) to a device
+- :whale: `--device-write-iops`: Limit write rate (IO per second) to a device
 - :whale: `--cgroupns=(host|private)`: Cgroup namespace to use
   - Default: "private" on cgroup v2 hosts, "host" on cgroup v1 hosts
 - :whale: `--cgroup-parent`: Optional parent cgroup for the container
@@ -312,7 +320,7 @@ Metadata flags:
 
 Logging flags:
 
-- :whale: `--log-driver=(json-file|journald|fluentd|syslog)`: Logging driver for the container (default `json-file`).
+- :whale: `--log-driver=(json-file|journald|fluentd|syslog|none)`: Logging driver for the container (default `json-file`).
   - :whale: `--log-driver=json-file`: The logs are formatted as JSON. The default logging driver for nerdctl.
     - The `json-file` logging driver supports the following logging options:
       - :whale: `--log-opt=max-size=<MAX-SIZE>`: The maximum size of the log before it is rolled. A positive integer plus a modifier representing the unit of measure (k, m, or g). Defaults to unlimited.
@@ -320,8 +328,12 @@ Logging flags:
       - :nerd_face: `--log-opt=log-path=<LOG-PATH>`: The log path where the logs are written. The path will be created if it does not exist. If the log file exists, the old file will be renamed to `<LOG-PATH>.1`.
         - Default: `<data-root>/<containerd-socket-hash>/<namespace>/<container-id>/<container-id>-json.log`
         - Example: `/var/lib/nerdctl/1935db59/containers/default/<container-id>/<container-id>-json.log`
+      - :whale: `--log-opt labels=production_status,geo`: A comma-separated list of logging-related labels this daemon accepts.
+      - :whale: `--log-opt env=os,customer`: A comma-separated list of logging-related environment variables this daemon accepts.
   - :whale: `--log-driver=journald`: Writes log messages to `journald`. The `journald` daemon must be running on the host machine.
     - :whale: `--log-opt=tag=<TEMPLATE>`: Specify template to set `SYSLOG_IDENTIFIER` value in journald logs.
+    - :whale: `--log-opt labels=production_status,geo`: A comma-separated list of logging-related labels this daemon accepts.
+    - :whale: `--log-opt env=os,customer`: A comma-separated list of logging-related environment variables this daemon accepts.
   - :whale: `--log-driver=fluentd`: Writes log messages to `fluentd`. The `fluentd` daemon must be running on the host machine.
     - The `fluentd` logging driver supports the following logging options:
       - :whale: `--log-opt=fluentd-address=<ADDRESS>`: The address of the `fluentd` daemon, tcp(default) and unix sockets are supported..
@@ -363,6 +375,7 @@ Logging flags:
       - :whale: `--log-opt=tag=<VALUE>`: A string that is appended to the
           `APP-NAME` in the `syslog` message. By default, nerdctl uses the first
           12 characters of the container ID to tag log messages.
+  - :whale:  `--log-driver=none`: Disables logging for the container, preventing log output from being collected.
   - :nerd_face: Accepts a LogURI which is a containerd shim logger. A scheme must be specified for the URI. Example: `nerdctl run -d --log-driver binary:///usr/bin/ctr-journald-shim docker.io/library/hello-world:latest`. An implementation of shim logger can be found at (<https://github.com/containerd/containerd/tree/dbef1d56d7ebc05bc4553d72c419ed5ce025b05d/runtime/v2#logging>)
 
 Shared memory flags:
@@ -412,10 +425,8 @@ IPFS flags:
 - :nerd_face: `--ipfs-address`: Multiaddr of IPFS API (default uses `$IPFS_PATH` env variable if defined or local directory `~/.ipfs`)
 
 Unimplemented `docker run` flags:
-    `--blkio-weight-device`, `--cpu-rt-*`, `--device-*`,
-    `--disable-content-trust`, `--domainname`, `--expose`, `--health-*`, `--isolation`, `--no-healthcheck`,
-    `--link*`, `--publish-all`, `--storage-opt`,
-    `--userns`, `--volume-driver`
+    `--device-cgroup-rule`, `--disable-content-trust`, `--expose`, `--health-*`, `--isolation`, `--no-healthcheck`,
+    `--link*`, `--publish-all`, `--storage-opt`, `--userns`, `--volume-driver`
 
 ### :whale: :blue_square: nerdctl exec
 
@@ -535,13 +546,12 @@ Usage: `nerdctl logs [OPTIONS] CONTAINER`
 
 Flags:
 
+- :whale: `--details`: Show extra details provided to logs
 - :whale: `-f, --follow`: Follow log output
 - :whale: `--since`: Show logs since timestamp (e.g. 2013-01-02T13:23:37Z) or relative (e.g. 42m for 42 minutes)
 - :whale: `--until`: Show logs before a timestamp (e.g. 2013-01-02T13:23:37Z) or relative (e.g. 42m for 42 minutes)
 - :whale: `-t, --timestamps`: Show timestamps
 - :whale: `-n, --tail`: Number of lines to show from the end of the logs (default "all")
-
-Unimplemented `docker logs` flags: `--details`
 
 ### :whale: nerdctl port
 
@@ -572,6 +582,7 @@ Flags:
 
 - :whale: `-t, --time=SECONDS`: Seconds to wait for stop before killing it (default "10")
   - Tips: If the init process in container is exited after receiving SIGTERM or exited before the time you specified, the container will be exited immediately
+- :whale: `-s, --signal=SIGNAL`: Signal to send to the container (e.g. SIGINT).
 
 ### :whale: nerdctl start
 
@@ -596,6 +607,7 @@ Flags:
 
 - :whale: `-t, --time=SECONDS`: Seconds to wait for stop before killing it (default "10")
   - Tips: If the init process in container is exited after receiving SIGTERM or exited before the time you specified, the container will be exited immediately
+- :whale: `-s, --signal=SIGNAL`: Signal to send to the container (e.g. SIGINT).
 
 ### :whale: nerdctl update
 
@@ -1410,6 +1422,7 @@ Flags:
 
 - :whale: `-f, --file`: Specify an alternate compose file
 - :whale: `-p, --project-name`: Specify an alternate project name
+- :whale: `--project-directory`: Specify an alternate working directory
 - :nerd_face: `--ipfs-address`: Multiaddr of IPFS API (default uses `$IPFS_PATH` env variable if defined or local directory `~/.ipfs`)
 - :whale: `--profile: Specify a profile to enable
 - :whale: `--env-file` : Specify an alternate environment file
@@ -1451,6 +1464,7 @@ Flags:
 
 - :whale: `--no-color`: Produce monochrome output
 - :whale: `--no-log-prefix`: Don't print prefix in logs
+- :whale: `-f, --follow`: Follow log output.
 - :whale: `--timestamps`: Show timestamps
 - :whale: `--tail`: Number of lines to show from the end of the logs
 
@@ -1525,6 +1539,7 @@ Usage: `nerdctl compose images [OPTIONS] [SERVICE...]`
 Flags:
 
 - :whale: `-q, --quiet`: Only show numeric image IDs
+- :whale: `--format`: Format the output. Supported values: [json]
 
 ### :whale: nerdctl compose start
 
@@ -1674,6 +1689,28 @@ Flags:
 Run a one-off command on a service
 
 Usage: `nerdctl compose run [OPTIONS] SERVICE [COMMAND] [ARGS...]`
+
+Flags:
+
+- :whale: `--build`: Build images before starting containers.
+- :whale: `-d, —detach`: Detached mode: Run containers in the background.
+- :whale: `--entrypoint`: Overwrite the default ENTRYPOINT of the image.
+- :whale: `-e, —env`: Set environment variables.
+- :whale: `-i, —interactive`: Keep STDIN open even if not attached (default true).
+- :whale: `-l, —label`: Set metadata on container.
+- :whale: `--name`: Assign a name to the container.
+- :whale: `--no-build`: Don't build an image, even if it's missing.
+- :whale: `--no-color`: Produce monochrome output.
+- :whale: `--no-deps`: Don't start dependencies.
+- :whale: `--no-log-prefix`: Don't print prefix in logs.
+- :whale: `--publish`: Publish a container's port(s) to the host.
+- :whale: `--quiet-pull`: Pull without printing progress information.
+- :whale: `--remove-orphans`: Remove containers for services not defined in the Compose file.
+- :whale: `--rm`: Automatically remove the container when it exits.
+- :whale: `--service-ports`: Run command with the service's ports enabled and mapped to the host.
+- :whale: `-u, —user`: Username or UID (format: <name|uid>[:<group|gid>]).
+- :whale: `-v, —volume`: Bind mount a volume.
+- :whale: `-w, —workdir`: Working directory inside the container.
 
 Unimplemented `docker-compose run` (V1) flags: `--use-aliases`, `--no-TTY`
 

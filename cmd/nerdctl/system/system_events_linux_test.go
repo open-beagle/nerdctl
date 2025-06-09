@@ -20,14 +20,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/containerd/nerdctl/mod/tigron/expect"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 func testEventFilterExecutor(data test.Data, helpers test.Helpers) test.TestableCommand {
-	cmd := helpers.Command("events", "--filter", data.Get("filter"), "--format", "json")
-	cmd.Background(1 * time.Second)
+	cmd := helpers.Command("events", "--filter", data.Labels().Get("filter"), "--format", "json")
+	// 3 seconds is too short on slow rig (EL8)
+	cmd.WithTimeout(10 * time.Second)
+	cmd.Background()
 	helpers.Ensure("run", "--rm", testutil.CommonImage)
 	return cmd
 }
@@ -38,61 +43,76 @@ func TestEventFilters(t *testing.T) {
 	testCase.SubTests = []*test.Case{
 		{
 			Description: "CapitalizedFilter",
-			Require:     test.Not(nerdtest.Docker),
+			Require:     require.Not(nerdtest.Docker),
 			Command:     testEventFilterExecutor,
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					Output: test.Contains(data.Get("output")),
+					ExitCode: expect.ExitCodeTimeout,
+					Output:   expect.Contains(data.Labels().Get("output")),
 				}
 			},
-			Data: test.WithData("filter", "event=START").
-				Set("output", "\"Status\":\"start\""),
+			Data: test.WithLabels(map[string]string{
+				"filter": "event=START",
+				"output": "\"Status\":\"start\"",
+			}),
 		},
 		{
 			Description: "StartEventFilter",
 			Command:     testEventFilterExecutor,
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					Output: test.Contains(data.Get("output")),
+					ExitCode: expect.ExitCodeTimeout,
+					Output:   expect.Contains(data.Labels().Get("output")),
 				}
 			},
-			Data: test.WithData("filter", "event=start").
-				Set("output", "tatus\":\"start\""),
+			Data: test.WithLabels(map[string]string{
+				"filter": "event=start",
+				"output": "tatus\":\"start\"",
+			}),
 		},
 		{
 			Description: "UnsupportedEventFilter",
-			Require:     test.Not(nerdtest.Docker),
+			Require:     require.Not(nerdtest.Docker),
 			Command:     testEventFilterExecutor,
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					Output: test.Contains(data.Get("output")),
+					ExitCode: expect.ExitCodeTimeout,
+					Output:   expect.Contains(data.Labels().Get("output")),
 				}
 			},
-			Data: test.WithData("filter", "event=unknown").
-				Set("output", "\"Status\":\"unknown\""),
+			Data: test.WithLabels(map[string]string{
+				"filter": "event=unknown",
+				"output": "\"Status\":\"unknown\"",
+			}),
 		},
 		{
 			Description: "StatusFilter",
 			Command:     testEventFilterExecutor,
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					Output: test.Contains(data.Get("output")),
+					ExitCode: expect.ExitCodeTimeout,
+					Output:   expect.Contains(data.Labels().Get("output")),
 				}
 			},
-			Data: test.WithData("filter", "status=start").
-				Set("output", "tatus\":\"start\""),
+			Data: test.WithLabels(map[string]string{
+				"filter": "status=start",
+				"output": "tatus\":\"start\"",
+			}),
 		},
 		{
 			Description: "UnsupportedStatusFilter",
-			Require:     test.Not(nerdtest.Docker),
+			Require:     require.Not(nerdtest.Docker),
 			Command:     testEventFilterExecutor,
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					Output: test.Contains(data.Get("output")),
+					ExitCode: expect.ExitCodeTimeout,
+					Output:   expect.Contains(data.Labels().Get("output")),
 				}
 			},
-			Data: test.WithData("filter", "status=unknown").
-				Set("output", "\"Status\":\"unknown\""),
+			Data: test.WithLabels(map[string]string{
+				"filter": "status=unknown",
+				"output": "\"Status\":\"unknown\"",
+			}),
 		},
 	}
 

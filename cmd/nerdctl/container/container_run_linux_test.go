@@ -28,19 +28,20 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"gotest.tools/v3/assert"
-	"gotest.tools/v3/icmd"
+
+	"github.com/containerd/nerdctl/mod/tigron/expect"
+	"github.com/containerd/nerdctl/mod/tigron/test"
 
 	"github.com/containerd/nerdctl/v2/cmd/nerdctl/helpers"
 	"github.com/containerd/nerdctl/v2/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/v2/pkg/strutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
+	"github.com/containerd/nerdctl/v2/pkg/testutil/nettestutil"
 )
 
 func TestRunCustomRootfs(t *testing.T) {
@@ -65,7 +66,7 @@ func TestRunCustomRootfs(t *testing.T) {
 }
 
 func prepareCustomRootfs(base *testutil.Base, imageName string) string {
-	base.Cmd("pull", imageName).AssertOK()
+	base.Cmd("pull", "--quiet", imageName).AssertOK()
 	tmpDir, err := os.MkdirTemp(base.T.TempDir(), "test-save")
 	assert.NilError(base.T, err)
 	defer os.RemoveAll(tmpDir)
@@ -165,6 +166,8 @@ func TestRunUtsHost(t *testing.T) {
 	base.Cmd("run", "--rm", "--uts=host", testutil.AlpineImage, "hostname").AssertOutContains(hostName)
 	// Validate we can't provide a hostname with uts=host
 	base.Cmd("run", "--rm", "--uts=host", "--hostname=foobar", testutil.AlpineImage, "hostname").AssertFail()
+	// Validate we can't provide a domainname with uts=host
+	base.Cmd("run", "--rm", "--uts=host", "--domainname=example.com", testutil.AlpineImage, "hostname").AssertFail()
 }
 
 func TestRunPidContainer(t *testing.T) {
@@ -277,6 +280,7 @@ func TestRunUlimit(t *testing.T) {
 func TestRunWithInit(t *testing.T) {
 	t.Parallel()
 	testutil.DockerIncompatible(t)
+	testutil.RequireExecutable(t, "tini-custom")
 	base := testutil.NewBase(t)
 
 	container := testutil.Identifier(t)
@@ -307,98 +311,130 @@ func TestRunWithInit(t *testing.T) {
 }
 
 func TestRunTTY(t *testing.T) {
-	t.Parallel()
-	base := testutil.NewBase(t)
-	if testutil.GetTarget() == testutil.Nerdctl {
-		testutil.RequireDaemonVersion(base, ">= 1.6.0-0")
-	}
-
 	const sttyPartialOutput = "speed 38400 baud"
-	// unbuffer(1) emulates tty, which is required by `nerdctl run -t`.
-	// unbuffer(1) can be installed with `apt-get install expect`.
-	unbuffer := []string{"unbuffer"}
-	base.CmdWithHelper(unbuffer, "run", "--rm", "-it", testutil.CommonImage, "stty").AssertOutContains(sttyPartialOutput)
-	base.CmdWithHelper(unbuffer, "run", "--rm", "-t", testutil.CommonImage, "stty").AssertOutContains(sttyPartialOutput)
-	base.Cmd("run", "--rm", "-i", testutil.CommonImage, "stty").AssertFail()
-	base.Cmd("run", "--rm", testutil.CommonImage, "stty").AssertFail()
 
-	// tests pipe works
-	res := icmd.RunCmd(icmd.Command("unbuffer", "/bin/sh", "-c", fmt.Sprintf("%q run --rm -it %q echo hi | grep hi", base.Binary, testutil.CommonImage)))
-	assert.Equal(t, 0, res.ExitCode, res)
-}
+	testCase := nerdtest.Setup()
 
-func runSigProxy(t *testing.T, args ...string) (string, bool, bool) {
-	t.Parallel()
-	base := testutil.NewBase(t)
-	testContainerName := testutil.Identifier(t)
-	defer base.Cmd("rm", "-f", testContainerName).Run()
-
-	fullArgs := []string{"run"}
-	fullArgs = append(fullArgs, args...)
-	fullArgs = append(fullArgs,
-		"--name",
-		testContainerName,
-		testutil.CommonImage,
-		"sh",
-		"-c",
-		testutil.SigProxyTestScript,
-	)
-
-	result := base.Cmd(fullArgs...).Start()
-	process := result.Cmd.Process
-
-	// Waits until we reach the trap command in the shell script, then sends SIGINT.
-	time.Sleep(3 * time.Second)
-	syscall.Kill(process.Pid, syscall.SIGINT)
-
-	// Waits until SIGINT is sent and responded to, then kills process to avoid timeout
-	time.Sleep(3 * time.Second)
-	process.Kill()
-
-	sigIntRecieved := strings.Contains(result.Stdout(), testutil.SigProxyTrueOut)
-	timedOut := strings.Contains(result.Stdout(), testutil.SigProxyTimeoutMsg)
-
-	return result.Stdout(), sigIntRecieved, timedOut
+	testCase.SubTests = []*test.Case{
+		{
+			Description: "stty with -it",
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Ensure("rm", "-f", data.Identifier())
+			},
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				cmd := helpers.Command("run", "-it", data.Identifier(), "stty")
+				cmd.WithPseudoTTY()
+				return cmd
+			},
+			Expected: test.Expects(0, nil, expect.Contains(sttyPartialOutput)),
+		},
+		{
+			Description: "stty with -t",
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Ensure("rm", "-f", data.Identifier())
+			},
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				cmd := helpers.Command("run", "-t", data.Identifier(), "stty")
+				cmd.WithPseudoTTY()
+				return cmd
+			},
+			Expected: test.Expects(0, nil, expect.Contains(sttyPartialOutput)),
+		},
+		{
+			Description: "stty with -i",
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Ensure("rm", "-f", data.Identifier())
+			},
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				cmd := helpers.Command("run", "-i", data.Identifier(), "stty")
+				cmd.WithPseudoTTY()
+				return cmd
+			},
+			Expected: test.Expects(expect.ExitCodeGenericFail, nil, nil),
+		},
+		{
+			Description: "stty without params",
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Ensure("rm", "-f", data.Identifier())
+			},
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				cmd := helpers.Command("run", data.Identifier(), "stty")
+				cmd.WithPseudoTTY()
+				return cmd
+			},
+			Expected: test.Expects(expect.ExitCodeGenericFail, nil, nil),
+		},
+		{
+			Description: "stty with -td",
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Ensure("rm", "-f", data.Identifier())
+			},
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				cmd := helpers.Command("run", "-td", data.Identifier(), "stty")
+				cmd.WithPseudoTTY()
+				return cmd
+			},
+			Expected: test.Expects(0, nil, nil),
+		},
+	}
 }
 
 func TestRunSigProxy(t *testing.T) {
+	testCase := nerdtest.Setup()
 
-	type testCase struct {
-		name        string
-		args        []string
-		want        bool
-		expectedOut string
-	}
-	testCases := []testCase{
+	testCase.SubTests = []*test.Case{
 		{
-			name:        "SigProxyDefault",
-			args:        []string{},
-			want:        true,
-			expectedOut: testutil.SigProxyTrueOut,
+			Description: "SigProxyDefault",
+
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Anyhow("rm", "-f", data.Identifier())
+			},
+
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				// FIXME: os.Interrupt will likely not work on Windows
+				cmd := nerdtest.RunSigProxyContainer(os.Interrupt, true, nil, data, helpers)
+				err := cmd.Signal(os.Interrupt)
+				assert.NilError(helpers.T(), err)
+				return cmd
+			},
+
+			Expected: test.Expects(0, nil, expect.Contains(nerdtest.SignalCaught)),
 		},
 		{
-			name:        "SigProxyTrue",
-			args:        []string{"--sig-proxy=true"},
-			want:        true,
-			expectedOut: testutil.SigProxyTrueOut,
+			Description: "SigProxyTrue",
+
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Anyhow("rm", "-f", data.Identifier())
+			},
+
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				cmd := nerdtest.RunSigProxyContainer(os.Interrupt, true, []string{"--sig-proxy=true"}, data, helpers)
+				err := cmd.Signal(os.Interrupt)
+				assert.NilError(helpers.T(), err)
+				return cmd
+			},
+
+			Expected: test.Expects(0, nil, expect.Contains(nerdtest.SignalCaught)),
 		},
 		{
-			name:        "SigProxyFalse",
-			args:        []string{"--sig-proxy=false"},
-			want:        false,
-			expectedOut: "",
+			Description: "SigProxyFalse",
+
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Anyhow("rm", "-f", data.Identifier())
+			},
+
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				cmd := nerdtest.RunSigProxyContainer(os.Interrupt, true, []string{"--sig-proxy=false"}, data, helpers)
+				err := cmd.Signal(os.Interrupt)
+				assert.NilError(helpers.T(), err)
+				return cmd
+			},
+
+			Expected: test.Expects(expect.ExitCodeSignaled, nil, expect.DoesNotContain(nerdtest.SignalCaught)),
 		},
 	}
 
-	for _, tc := range testCases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			stdout, sigIntRecieved, timedOut := runSigProxy(t, tc.args...)
-			errorMsg := fmt.Sprintf("%s failed;\nExpected: '%s'\nActual: '%s'", tc.name, tc.expectedOut, stdout)
-			assert.Equal(t, false, timedOut, errorMsg)
-			assert.Equal(t, tc.want, sigIntRecieved, errorMsg)
-		})
-	}
+	testCase.Run(t)
 }
 
 func TestRunWithFluentdLogDriver(t *testing.T) {
@@ -471,34 +507,47 @@ func TestRunWithOOMScoreAdj(t *testing.T) {
 }
 
 func TestRunWithDetachKeys(t *testing.T) {
-	t.Parallel()
+	testCase := nerdtest.Setup()
 
-	if testutil.GetTarget() == testutil.Docker {
-		t.Skip("When detaching from a container, for a session started with 'docker attach'" +
-			", it prints 'read escape sequence', but for one started with 'docker (run|start)', it prints nothing." +
-			" However, the flag is called '--detach-keys' in all cases" +
-			", so nerdctl prints 'read detach keys' for all cases" +
-			", and that's why this test is skipped for Docker.")
+	testCase.Cleanup = func(data test.Data, helpers test.Helpers) {
+		helpers.Anyhow("rm", "-f", data.Identifier())
 	}
 
-	base := testutil.NewBase(t)
-	containerName := testutil.Identifier(t)
-	opts := []func(*testutil.Cmd){
-		testutil.WithStdin(testutil.NewDelayOnceReader(bytes.NewReader([]byte{1, 2}))), // https://www.physics.udel.edu/~watson/scen103/ascii.html
+	testCase.Command = func(data test.Data, helpers test.Helpers) test.TestableCommand {
+		// Run interactively and detach
+		cmd := helpers.Command("run", "-it", "--detach-keys=ctrl-a,ctrl-b", "--name", data.Identifier(), testutil.CommonImage)
+		cmd.WithPseudoTTY()
+		cmd.Feed(strings.NewReader("echo mark${NON}mark\n"))
+		cmd.WithFeeder(func() io.Reader {
+			// Because of the way we proxy stdin, we have to wait here, otherwise we detach before
+			// the rest of the input ever reaches the container
+			// Note that this only concerns nerdctl, as docker seems to behave ok LOCALLY.
+			// But then, it fails for docker as well ON THE CI. It is unclear why at this point.
+			// Arbitrary time pauses would not work: what matters is that the container has started.
+			// if !nerdtest.IsDocker() {
+			nerdtest.EnsureContainerStarted(helpers, data.Identifier())
+			// }
+			// ctrl+a and ctrl+b (see https://en.wikipedia.org/wiki/C0_and_C1_control_codes)
+			return bytes.NewReader([]byte{1, 2})
+		})
+
+		return cmd
 	}
-	defer base.Cmd("container", "rm", "-f", containerName).AssertOK()
-	// unbuffer(1) emulates tty, which is required by `nerdctl run -t`.
-	// unbuffer(1) can be installed with `apt-get install expect`.
-	//
-	// "-p" is needed because we need unbuffer to read from stdin, and from [1]:
-	// "Normally, unbuffer does not read from stdin. This simplifies use of unbuffer in some situations.
-	//  To use unbuffer in a pipeline, use the -p flag."
-	//
-	// [1] https://linux.die.net/man/1/unbuffer
-	base.CmdWithHelper([]string{"unbuffer", "-p"}, "run", "-it", "--detach-keys=ctrl-a,ctrl-b", "--name", containerName, testutil.CommonImage).
-		CmdOption(opts...).AssertOutContains("read detach keys")
-	container := base.InspectContainer(containerName)
-	assert.Equal(base.T, container.State.Running, true)
+
+	testCase.Expected = func(data test.Data, helpers test.Helpers) *test.Expected {
+		return &test.Expected{
+			ExitCode: 0,
+			Errors:   []error{errors.New("detach keys")},
+			Output: expect.All(
+				expect.Contains("markmark"),
+				func(stdout string, info string, t *testing.T) {
+					assert.Assert(t, strings.Contains(helpers.Capture("inspect", "--format", "json", data.Identifier()), "\"Running\":true"))
+				},
+			),
+		}
+	}
+
+	testCase.Run(t)
 }
 
 func TestRunWithTtyAndDetached(t *testing.T) {
@@ -526,26 +575,65 @@ func TestRunWithTtyAndDetached(t *testing.T) {
 func TestIssue3568(t *testing.T) {
 	testCase := nerdtest.Setup()
 
+	testCase.Description = "Issue #3568 - Detaching from a container started by using --rm option causes the container to be deleted."
+
+	testCase.Cleanup = func(data test.Data, helpers test.Helpers) {
+		helpers.Anyhow("rm", "-f", data.Identifier())
+	}
+
+	testCase.Command = func(data test.Data, helpers test.Helpers) test.TestableCommand {
+		// Run interactively and detach
+		cmd := helpers.Command("run", "--rm", "-it", "--detach-keys=ctrl-a,ctrl-b", "--name", data.Identifier(), testutil.CommonImage)
+		cmd.WithPseudoTTY()
+		cmd.Feed(strings.NewReader("echo mark${NON}mark\n"))
+		cmd.WithFeeder(func() io.Reader {
+			// Because of the way we proxy stdin, we have to wait here, otherwise we detach before
+			// the rest of the input ever reaches the container
+			// Note that this only concerns nerdctl, as docker seems to behave ok LOCALLY.
+			// But then, it fails for docker as well ON THE CI. It is unclear why at this point.
+			// Arbitrary time pauses would not work: what matters is that the container has started.
+			// if !nerdtest.IsDocker() {
+			nerdtest.EnsureContainerStarted(helpers, data.Identifier())
+			// }
+			// ctrl+a and ctrl+b (see https://en.wikipedia.org/wiki/C0_and_C1_control_codes)
+			return bytes.NewReader([]byte{1, 2})
+		})
+
+		return cmd
+	}
+
+	testCase.Expected = func(data test.Data, helpers test.Helpers) *test.Expected {
+		return &test.Expected{
+			ExitCode: 0,
+			Errors:   []error{errors.New("detach keys")},
+			Output: expect.All(
+				expect.Contains("markmark"),
+				func(stdout string, info string, t *testing.T) {
+					assert.Assert(t, strings.Contains(helpers.Capture("inspect", "--format", "json", data.Identifier()), "\"Running\":true"))
+				},
+			),
+		}
+	}
+
+	testCase.Run(t)
+}
+
+// TestPortBindingWithCustomHost tests https://github.com/containerd/nerdctl/issues/3539
+func TestPortBindingWithCustomHost(t *testing.T) {
+	testCase := nerdtest.Setup()
+
+	const (
+		host     = "127.0.0.2"
+		hostPort = 8080
+	)
+	address := fmt.Sprintf("%s:%d", host, hostPort)
+
 	testCase.SubTests = []*test.Case{
 		{
-			Description: "Issue #3568 - Detaching from a container started by using --rm option causes the container to be deleted.",
-			// When detaching from a container, for a session started with 'docker attach', it prints 'read escape sequence', but for one started with 'docker (run|start)', it prints nothing.
-			// However, the flag is called '--detach-keys' in all cases, so nerdctl prints 'read detach keys' for all cases, and that's why this test is skipped for Docker.
-			Require: test.Require(
-				test.Not(nerdtest.Docker),
-			),
-			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-				cmd := helpers.Command("run", "--rm", "-it", "--detach-keys=ctrl-a,ctrl-b", "--name", data.Identifier(), testutil.CommonImage)
-				// unbuffer(1) can be installed with `apt-get install expect`.
-				//
-				// "-p" is needed because we need unbuffer to read from stdin, and from [1]:
-				// "Normally, unbuffer does not read from stdin. This simplifies use of unbuffer in some situations.
-				//  To use unbuffer in a pipeline, use the -p flag."
-				//
-				// [1] https://linux.die.net/man/1/unbuffer
-				cmd.WithWrapper("unbuffer", "-p")
-				cmd.WithStdin(testutil.NewDelayOnceReader(bytes.NewReader([]byte{1, 2}))) // https://www.physics.udel.edu/~watson/scen103/ascii.html
-				return cmd
+			Description: "Issue #3539 - Access to a container running when 127.0.0.2 is specified in -p in rootless mode.",
+			Setup: func(data test.Data, helpers test.Helpers) {
+				helpers.Ensure("run", "-d", "--name", data.Identifier(), "-p", fmt.Sprintf("%s:80", address), testutil.NginxAlpineImage)
+				nerdtest.EnsureContainerStarted(helpers, data.Identifier())
 			},
 			Cleanup: func(data test.Data, helpers test.Helpers) {
 				helpers.Anyhow("rm", "-f", data.Identifier())
@@ -554,10 +642,14 @@ func TestIssue3568(t *testing.T) {
 				return &test.Expected{
 					ExitCode: 0,
 					Errors:   []error{},
-					Output: test.All(
-						test.Contains("read detach keys"),
+					Output: expect.All(
 						func(stdout string, info string, t *testing.T) {
-							assert.Assert(t, strings.Contains(helpers.Capture("ps"), data.Identifier()))
+							resp, err := nettestutil.HTTPGet(address, 30, false)
+							assert.NilError(t, err)
+
+							respBody, err := io.ReadAll(resp.Body)
+							assert.NilError(t, err)
+							assert.Assert(t, strings.Contains(string(respBody), testutil.NginxAlpineIndexHTMLSnippet))
 						},
 					),
 				}

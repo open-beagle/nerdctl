@@ -29,7 +29,7 @@ import (
 	"github.com/containerd/nerdctl/v2/pkg/containerutil"
 )
 
-func NewCreateCommand() *cobra.Command {
+func CreateCommand() *cobra.Command {
 	shortHelp := "Create a new container. Optionally specify \"ipfs://\" or \"ipns://\" scheme to pull image from IPFS."
 	longHelp := shortHelp
 	switch runtime.GOOS {
@@ -40,7 +40,7 @@ func NewCreateCommand() *cobra.Command {
 		longHelp += "\n"
 		longHelp += "WARNING: `nerdctl create` is experimental on FreeBSD and currently requires `--net=none` (https://github.com/containerd/nerdctl/blob/main/docs/freebsd.md)"
 	}
-	var createCommand = &cobra.Command{
+	var cmd = &cobra.Command{
 		Use:               "create [flags] IMAGE [COMMAND] [ARG...]",
 		Args:              cobra.MinimumNArgs(1),
 		Short:             shortHelp,
@@ -50,12 +50,12 @@ func NewCreateCommand() *cobra.Command {
 		SilenceUsage:      true,
 		SilenceErrors:     true,
 	}
-	createCommand.Flags().SetInterspersed(false)
-	setCreateFlags(createCommand)
-	return createCommand
+	cmd.Flags().SetInterspersed(false)
+	setCreateFlags(cmd)
+	return cmd
 }
 
-func processContainerCreateOptions(cmd *cobra.Command) (types.ContainerCreateOptions, error) {
+func createOptions(cmd *cobra.Command) (types.ContainerCreateOptions, error) {
 	var err error
 	opt := types.ContainerCreateOptions{
 		Stdout: cmd.OutOrStdout(),
@@ -159,6 +159,14 @@ func processContainerCreateOptions(cmd *cobra.Command) (types.ContainerCreateOpt
 	if err != nil {
 		return opt, err
 	}
+	opt.CPURealtimePeriod, err = cmd.Flags().GetUint64("cpu-rt-period")
+	if err != nil {
+		return opt, err
+	}
+	opt.CPURealtimeRuntime, err = cmd.Flags().GetUint64("cpu-rt-runtime")
+	if err != nil {
+		return opt, err
+	}
 	opt.Memory, err = cmd.Flags().GetString("memory")
 	if err != nil {
 		return opt, err
@@ -199,10 +207,6 @@ func processContainerCreateOptions(cmd *cobra.Command) (types.ContainerCreateOpt
 	if err != nil {
 		return opt, err
 	}
-	opt.BlkioWeight, err = cmd.Flags().GetUint16("blkio-weight")
-	if err != nil {
-		return opt, err
-	}
 	opt.Cgroupns, err = cmd.Flags().GetString("cgroupns")
 	if err != nil {
 		return opt, err
@@ -212,6 +216,33 @@ func processContainerCreateOptions(cmd *cobra.Command) (types.ContainerCreateOpt
 		return opt, err
 	}
 	opt.Device, err = cmd.Flags().GetStringSlice("device")
+	if err != nil {
+		return opt, err
+	}
+	// #endregion
+
+	// #region for blkio flags
+	opt.BlkioWeight, err = cmd.Flags().GetUint16("blkio-weight")
+	if err != nil {
+		return opt, err
+	}
+	opt.BlkioWeightDevice, err = cmd.Flags().GetStringArray("blkio-weight-device")
+	if err != nil {
+		return opt, err
+	}
+	opt.BlkioDeviceReadBps, err = cmd.Flags().GetStringArray("device-read-bps")
+	if err != nil {
+		return opt, err
+	}
+	opt.BlkioDeviceWriteBps, err = cmd.Flags().GetStringArray("device-write-bps")
+	if err != nil {
+		return opt, err
+	}
+	opt.BlkioDeviceReadIOps, err = cmd.Flags().GetStringArray("device-read-iops")
+	if err != nil {
+		return opt, err
+	}
+	opt.BlkioDeviceWriteIOps, err = cmd.Flags().GetStringArray("device-write-iops")
 	if err != nil {
 		return opt, err
 	}
@@ -405,7 +436,7 @@ func processContainerCreateOptions(cmd *cobra.Command) (types.ContainerCreateOpt
 	// #endregion
 
 	// #region for image pull and verify options
-	imageVerifyOpt, err := helpers.ProcessImageVerifyOptions(cmd)
+	imageVerifyOpt, err := helpers.VerifyOptions(cmd)
 	if err != nil {
 		return opt, err
 	}
@@ -427,7 +458,7 @@ func processContainerCreateOptions(cmd *cobra.Command) (types.ContainerCreateOpt
 }
 
 func createAction(cmd *cobra.Command, args []string) error {
-	createOpt, err := processContainerCreateOptions(cmd)
+	createOpt, err := createOptions(cmd)
 	if err != nil {
 		return err
 	}
@@ -443,7 +474,7 @@ func createAction(cmd *cobra.Command, args []string) error {
 
 	netFlags, err := loadNetworkFlags(cmd)
 	if err != nil {
-		return fmt.Errorf("failed to load networking flags: %s", err)
+		return fmt.Errorf("failed to load networking flags: %w", err)
 	}
 
 	netManager, err := containerutil.NewNetworkingOptionsManager(createOpt.GOptions, netFlags, client)

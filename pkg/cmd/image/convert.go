@@ -76,7 +76,7 @@ func Convert(ctx context.Context, client *containerd.Client, srcRawRef, targetRa
 	convertOpts = append(convertOpts, converter.WithPlatform(platMC))
 
 	// Ensure all the layers are here: https://github.com/containerd/nerdctl/issues/3425
-	err = EnsureAllContent(ctx, client, srcRef, options.GOptions)
+	err = EnsureAllContent(ctx, client, srcRef, platMC, options.GOptions)
 	if err != nil {
 		return err
 	}
@@ -190,7 +190,7 @@ func Convert(ctx context.Context, client *containerd.Client, srcRawRef, targetRa
 	}
 
 	// converter.Convert() gains the lease by itself
-	newImg, err := converter.Convert(ctx, client, targetRef, srcRef, convertOpts...)
+	newImg, err := converterutil.Convert(ctx, client, targetRef, srcRef, convertOpts...)
 	if err != nil {
 		return err
 	}
@@ -208,8 +208,7 @@ func Convert(ctx context.Context, client *containerd.Client, srcRawRef, targetRa
 			return err
 		}
 		is := client.ImageService()
-		_ = is.Delete(ctx, newI.Name)
-		finimg, err := is.Create(ctx, *newI)
+		finimg, err := is.Update(ctx, *newI)
 		if err != nil {
 			return err
 		}

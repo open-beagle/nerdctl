@@ -55,9 +55,14 @@ func TestContainerFromNative(t *testing.T) {
 						"nerdctl/mounts":    "[{\"Type\":\"bind\",\"Source\":\"/mnt/foo\",\"Destination\":\"/mnt/foo\",\"Mode\":\"rshared,rw\",\"RW\":true,\"Propagation\":\"rshared\"}]",
 						"nerdctl/state-dir": tempStateDir,
 						"nerdctl/hostname":  "host1",
+						"nerdctl/user":      "test-user",
 					},
 				},
-				Spec: &specs.Spec{},
+				Spec: &specs.Spec{
+					Process: &specs.Process{
+						Env: []string{"/some/path"},
+					},
+				},
 				Process: &native.Process{
 					Pid: 10000,
 					Status: containerd.Status{
@@ -75,6 +80,17 @@ func TestContainerFromNative(t *testing.T) {
 					Pid:        10000,
 					FinishedAt: "",
 				},
+				HostConfig: &HostConfig{
+					PortBindings: nat.PortMap{},
+					GroupAdd:     []string{},
+					LogConfig: loggerLogConfig{
+						Driver: "json-file",
+						Opts:   map[string]string{},
+					},
+					UTSMode:            "host",
+					Tmpfs:              map[string]string{},
+					LinuxBlkioSettings: getDefaultLinuxBlkioSettings(),
+				},
 				Mounts: []MountPoint{
 					{
 						Type:        "bind",
@@ -90,8 +106,11 @@ func TestContainerFromNative(t *testing.T) {
 						"nerdctl/mounts":    "[{\"Type\":\"bind\",\"Source\":\"/mnt/foo\",\"Destination\":\"/mnt/foo\",\"Mode\":\"rshared,rw\",\"RW\":true,\"Propagation\":\"rshared\"}]",
 						"nerdctl/state-dir": tempStateDir,
 						"nerdctl/hostname":  "host1",
+						"nerdctl/user":      "test-user",
 					},
 					Hostname: "host1",
+					Env:      []string{"/some/path"},
+					User:     "test-user",
 				},
 				NetworkSettings: &NetworkSettings{
 					Ports:    &nat.PortMap{},
@@ -130,6 +149,12 @@ func TestContainerFromNative(t *testing.T) {
 							Source:      "sysfs",
 							Options:     []string{"nosuid", "noexec", "nodev", "ro"},
 						},
+						{
+							Destination: "/etc/hosts",
+							Type:        "bind",
+							Source:      "/mock-sandbox-dir/hosts",
+							Options:     []string{"bind", "rprivate", "rw"},
+						},
 					},
 				},
 				Process: &native.Process{
@@ -144,11 +169,23 @@ func TestContainerFromNative(t *testing.T) {
 				Platform:       runtime.GOOS,
 				ResolvConfPath: "/mock-sandbox-dir/resolv.conf",
 				HostnamePath:   "/mock-sandbox-dir/hostname",
+				HostsPath:      "/mock-sandbox-dir/hosts",
 				State: &ContainerState{
 					Status:     "running",
 					Running:    true,
 					Pid:        10000,
 					FinishedAt: "",
+				},
+				HostConfig: &HostConfig{
+					PortBindings: nat.PortMap{},
+					GroupAdd:     []string{},
+					LogConfig: loggerLogConfig{
+						Driver: "json-file",
+						Opts:   map[string]string{},
+					},
+					UTSMode:            "host",
+					Tmpfs:              map[string]string{},
+					LinuxBlkioSettings: getDefaultLinuxBlkioSettings(),
 				},
 				Mounts: []MountPoint{
 					{
@@ -174,6 +211,14 @@ func TestContainerFromNative(t *testing.T) {
 						Mode:        "rbind,rslave,rw",
 						RW:          true,
 						Propagation: "rslave",
+					},
+					{
+						Type:        "bind",
+						Source:      "/mock-sandbox-dir/hosts",
+						Destination: "/etc/hosts",
+						Mode:        "bind,rprivate,rw",
+						RW:          true,
+						Propagation: "rprivate",
 					},
 					// ignore sysfs mountpoint
 				},
@@ -221,6 +266,17 @@ func TestContainerFromNative(t *testing.T) {
 					Running:    true,
 					Pid:        10000,
 					FinishedAt: "",
+				},
+				HostConfig: &HostConfig{
+					PortBindings: nat.PortMap{},
+					GroupAdd:     []string{},
+					LogConfig: loggerLogConfig{
+						Driver: "json-file",
+						Opts:   map[string]string{},
+					},
+					UTSMode:            "host",
+					Tmpfs:              map[string]string{},
+					LinuxBlkioSettings: getDefaultLinuxBlkioSettings(),
 				},
 				Mounts: []MountPoint{
 					{
@@ -358,6 +414,100 @@ func TestNetworkSettingsFromNative(t *testing.T) {
 		t.Run(tc.name, func(tt *testing.T) {
 			d, _ := networkSettingsFromNative(tc.n, tc.s)
 			assert.DeepEqual(tt, d, tc.expected)
+		})
+	}
+}
+
+func TestCpuSettingsFromNative(t *testing.T) {
+	// Helper function to create uint64 pointer
+	uint64Ptr := func(i uint64) *uint64 {
+		return &i
+	}
+
+	int64Ptr := func(i int64) *int64 {
+		return &i
+	}
+
+	testcases := []struct {
+		name     string
+		spec     *specs.Spec
+		expected *CPUSettings
+	}{
+		{
+			name:     "Test with empty spec",
+			spec:     &specs.Spec{},
+			expected: &CPUSettings{},
+		},
+		{
+			name: "Full CPU Settings",
+			spec: &specs.Spec{
+				Linux: &specs.Linux{
+					Resources: &specs.LinuxResources{
+						CPU: &specs.LinuxCPU{
+							Cpus:            "0-3",
+							Mems:            "0-1",
+							Shares:          uint64Ptr(1024),
+							Quota:           int64Ptr(100000),
+							Period:          uint64Ptr(100000),
+							RealtimePeriod:  uint64Ptr(1000000),
+							RealtimeRuntime: int64Ptr(950000),
+						},
+					},
+				},
+			},
+			expected: &CPUSettings{
+				CPUSetCpus:         "0-3",
+				CPUSetMems:         "0-1",
+				CPUShares:          1024,
+				CPUQuota:           100000,
+				CPUPeriod:          100000,
+				CPURealtimePeriod:  1000000,
+				CPURealtimeRuntime: 950000,
+			},
+		},
+		{
+			name: "Partial CPU Settings",
+			spec: &specs.Spec{
+				Linux: &specs.Linux{
+					Resources: &specs.LinuxResources{
+						CPU: &specs.LinuxCPU{
+							Cpus:   "0,1",
+							Shares: uint64Ptr(512),
+						},
+					},
+				},
+			},
+			expected: &CPUSettings{
+				CPUSetCpus: "0,1",
+				CPUShares:  512,
+			},
+		},
+		{
+			name: "Zero Values Should Be Ignored",
+			spec: &specs.Spec{
+				Linux: &specs.Linux{
+					Resources: &specs.LinuxResources{
+						CPU: &specs.LinuxCPU{
+							Shares:          uint64Ptr(0),
+							Quota:           int64Ptr(0),
+							Period:          uint64Ptr(0),
+							RealtimePeriod:  uint64Ptr(0),
+							RealtimeRuntime: int64Ptr(0),
+						},
+					},
+				},
+			},
+			expected: &CPUSettings{},
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := cpuSettingsFromNative(tc.spec)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			assert.DeepEqual(t, result, tc.expected)
 		})
 	}
 }

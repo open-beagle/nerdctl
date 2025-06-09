@@ -29,7 +29,7 @@ import (
 	"github.com/containerd/nerdctl/v2/pkg/cmd/container"
 )
 
-func NewLogsCommand() *cobra.Command {
+func LogsCommand() *cobra.Command {
 	const shortUsage = "Fetch the logs of a container. Expected to be used with 'nerdctl run -d'."
 	const longUsage = `Fetch the logs of a container.
 
@@ -38,7 +38,7 @@ The following containers are supported:
 - Containers created with 'nerdctl compose'.
 - Containers created with Kubernetes (EXPERIMENTAL).
 `
-	var logsCommand = &cobra.Command{
+	var cmd = &cobra.Command{
 		Use:               "logs [flags] CONTAINER",
 		Args:              helpers.IsExactArgs(1),
 		Short:             shortUsage,
@@ -48,15 +48,16 @@ The following containers are supported:
 		SilenceUsage:      true,
 		SilenceErrors:     true,
 	}
-	logsCommand.Flags().BoolP("follow", "f", false, "Follow log output")
-	logsCommand.Flags().BoolP("timestamps", "t", false, "Show timestamps")
-	logsCommand.Flags().StringP("tail", "n", "all", "Number of lines to show from the end of the logs")
-	logsCommand.Flags().String("since", "", "Show logs since timestamp (e.g. 2013-01-02T13:23:37Z) or relative (e.g. 42m for 42 minutes)")
-	logsCommand.Flags().String("until", "", "Show logs before a timestamp (e.g. 2013-01-02T13:23:37Z) or relative (e.g. 42m for 42 minutes)")
-	return logsCommand
+	cmd.Flags().BoolP("follow", "f", false, "Follow log output")
+	cmd.Flags().BoolP("timestamps", "t", false, "Show timestamps")
+	cmd.Flags().StringP("tail", "n", "all", "Number of lines to show from the end of the logs")
+	cmd.Flags().String("since", "", "Show logs since timestamp (e.g. 2013-01-02T13:23:37Z) or relative (e.g. 42m for 42 minutes)")
+	cmd.Flags().String("until", "", "Show logs before a timestamp (e.g. 2013-01-02T13:23:37Z) or relative (e.g. 42m for 42 minutes)")
+	cmd.Flags().Bool("details", false, "Show extra details provided to logs")
+	return cmd
 }
 
-func processContainerLogsOptions(cmd *cobra.Command) (types.ContainerLogsOptions, error) {
+func logsOptions(cmd *cobra.Command) (types.ContainerLogsOptions, error) {
 	globalOptions, err := helpers.ProcessRootCmdFlags(cmd)
 	if err != nil {
 		return types.ContainerLogsOptions{}, err
@@ -88,6 +89,10 @@ func processContainerLogsOptions(cmd *cobra.Command) (types.ContainerLogsOptions
 	if err != nil {
 		return types.ContainerLogsOptions{}, err
 	}
+	details, err := cmd.Flags().GetBool("details")
+	if err != nil {
+		return types.ContainerLogsOptions{}, err
+	}
 	return types.ContainerLogsOptions{
 		Stdout:     cmd.OutOrStdout(),
 		Stderr:     cmd.OutOrStderr(),
@@ -97,11 +102,12 @@ func processContainerLogsOptions(cmd *cobra.Command) (types.ContainerLogsOptions
 		Tail:       tail,
 		Since:      since,
 		Until:      until,
+		Details:    details,
 	}, nil
 }
 
 func logsAction(cmd *cobra.Command, args []string) error {
-	options, err := processContainerLogsOptions(cmd)
+	options, err := logsOptions(cmd)
 	if err != nil {
 		return err
 	}
@@ -127,7 +133,7 @@ func getTailArgAsUint(arg string) (uint, error) {
 	}
 	num, err := strconv.Atoi(arg)
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse `-n/--tail` argument %q: %s", arg, err)
+		return 0, fmt.Errorf("failed to parse `-n/--tail` argument %q: %w", arg, err)
 	}
 	if num < 0 {
 		return 0, fmt.Errorf("`-n/--tail` argument must be positive, got: %d", num)

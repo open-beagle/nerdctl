@@ -99,6 +99,7 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 		if err := writeCIDFile(options.CidFile, id); err != nil {
 			return nil, nil, err
 		}
+		internalLabels.cidFile = options.CidFile
 	}
 	dataStore, err := clientutil.DataStore(options.GOptions.DataRoot, options.GOptions.Address)
 	if err != nil {
@@ -178,6 +179,15 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 		}
 	}
 
+	if ensuredImage != nil && ensuredImage.ImageConfig.User != "" {
+		internalLabels.user = ensuredImage.ImageConfig.User
+	}
+
+	// Override it if User is passed
+	if options.User != "" {
+		internalLabels.user = options.User
+	}
+
 	rootfsOpts, rootfsCOpts, err := generateRootfsOpts(args, id, ensuredImage, options)
 	if err != nil {
 		return nil, generateRemoveStateDirFunc(ctx, id, internalLabels), err
@@ -222,6 +232,10 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 		return nil, generateRemoveStateDirFunc(ctx, id, internalLabels), err
 	}
 	internalLabels.logURI = logConfig.LogURI
+	internalLabels.logConfig = logConfig
+	if logConfig.Driver == "" && logConfig.Address == options.GOptions.Address {
+		internalLabels.logConfig.Driver = "json-file"
+	}
 
 	restartOpts, err := generateRestartOpts(ctx, client, options.Restart, logConfig.LogURI, options.InRun)
 	if err != nil {
@@ -230,19 +244,19 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 	cOpts = append(cOpts, restartOpts...)
 
 	if err = netManager.VerifyNetworkOptions(ctx); err != nil {
-		return nil, generateRemoveStateDirFunc(ctx, id, internalLabels), fmt.Errorf("failed to verify networking settings: %s", err)
+		return nil, generateRemoveStateDirFunc(ctx, id, internalLabels), fmt.Errorf("failed to verify networking settings: %w", err)
 	}
 
 	netOpts, netNewContainerOpts, err := netManager.ContainerNetworkingOpts(ctx, id)
 	if err != nil {
-		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), fmt.Errorf("failed to generate networking spec options: %s", err)
+		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), fmt.Errorf("failed to generate networking spec options: %w", err)
 	}
 	opts = append(opts, netOpts...)
 	cOpts = append(cOpts, netNewContainerOpts...)
 
 	netLabelOpts, err := netManager.InternalNetworkingOptionLabels(ctx)
 	if err != nil {
-		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), fmt.Errorf("failed to generate internal networking labels: %s", err)
+		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), fmt.Errorf("failed to generate internal networking labels: %w", err)
 	}
 
 	envs = append(envs, "HOSTNAME="+netLabelOpts.Hostname)
@@ -266,8 +280,10 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 	if err != nil {
 		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), err
 	}
+
 	opts = append(opts, uOpts...)
 	gOpts, err := generateGroupsOpts(options.GroupAdd)
+	internalLabels.groupAdd = options.GroupAdd
 	if err != nil {
 		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), err
 	}
@@ -621,16 +637,20 @@ type internalLabels struct {
 	extraHosts []string
 	pidFile    string
 	// labels from cmd options or automatically set
-	name     string
-	hostname string
+	name       string
+	hostname   string
+	domainname string
 	// automatically generated
 	stateDir string
 	// network
-	networks   []string
-	ipAddress  string
-	ip6Address string
-	ports      []cni.PortMapping
-	macAddress string
+	networks             []string
+	ipAddress            string
+	ip6Address           string
+	ports                []cni.PortMapping
+	macAddress           string
+	dnsServers           []string
+	dnsSearchDomains     []string
+	dnsResolvConfOptions []string
 	// volume
 	mountPoints []*mountutil.Processed
 	anonVolumes []string
@@ -641,17 +661,32 @@ type internalLabels struct {
 	// log
 	logURI string
 	// a label to check whether the --rm option is specified.
-	rm string
+	rm        string
+	logConfig logging.LogConfig
+
+	// a label to chek if --cidfile is set
+	cidFile string
+
+	// label to check if --group-add is set
+	groupAdd []string
+
+	// label for device mapping set by the --device flag
+	deviceMapping []dockercompat.DeviceMapping
+
+	user string
 }
 
 // WithInternalLabels sets the internal labels for a container.
 func withInternalLabels(internalLabels internalLabels) (containerd.NewContainerOpts, error) {
 	m := make(map[string]string)
+	var hostConfigLabel dockercompat.HostConfigLabel
+	var dnsSettings dockercompat.DNSSettings
 	m[labels.Namespace] = internalLabels.namespace
 	if internalLabels.name != "" {
 		m[labels.Name] = internalLabels.name
 	}
 	m[labels.Hostname] = internalLabels.hostname
+	m[labels.Domainname] = internalLabels.domainname
 	extraHostsJSON, err := json.Marshal(internalLabels.extraHosts)
 	if err != nil {
 		return nil, err
@@ -672,6 +707,11 @@ func withInternalLabels(internalLabels internalLabels) (containerd.NewContainerO
 	}
 	if internalLabels.logURI != "" {
 		m[labels.LogURI] = internalLabels.logURI
+		logConfigJSON, err := json.Marshal(internalLabels.logConfig)
+		if err != nil {
+			return nil, err
+		}
+		m[labels.LogConfig] = string(logConfigJSON)
 	}
 	if len(internalLabels.anonVolumes) > 0 {
 		anonVolumeJSON, err := json.Marshal(internalLabels.anonVolumes)
@@ -723,17 +763,57 @@ func withInternalLabels(internalLabels internalLabels) (containerd.NewContainerO
 		m[labels.ContainerAutoRemove] = internalLabels.rm
 	}
 
+	if internalLabels.cidFile != "" {
+		hostConfigLabel.CidFile = internalLabels.cidFile
+	}
+
+	if len(internalLabels.dnsServers) > 0 {
+		dnsSettings.DNSServers = internalLabels.dnsServers
+	}
+
+	if len(internalLabels.dnsSearchDomains) > 0 {
+		dnsSettings.DNSSearchDomains = internalLabels.dnsSearchDomains
+	}
+
+	if len(internalLabels.dnsResolvConfOptions) > 0 {
+		dnsSettings.DNSResolvConfOptions = internalLabels.dnsResolvConfOptions
+	}
+
+	if len(internalLabels.deviceMapping) > 0 {
+		hostConfigLabel.Devices = append(hostConfigLabel.Devices, internalLabels.deviceMapping...)
+	}
+
+	hostConfigJSON, err := json.Marshal(hostConfigLabel)
+	if err != nil {
+		return nil, err
+	}
+	m[labels.HostConfigLabel] = string(hostConfigJSON)
+
+	dnsSettingsJSON, err := json.Marshal(dnsSettings)
+	if err != nil {
+		return nil, err
+	}
+	m[labels.DNSSetting] = string(dnsSettingsJSON)
+
+	if internalLabels.user != "" {
+		m[labels.User] = internalLabels.user
+	}
+
 	return containerd.WithAdditionalContainerLabels(m), nil
 }
 
 // loadNetOpts loads network options into InternalLabels.
 func (il *internalLabels) loadNetOpts(opts types.NetworkOptions) {
 	il.hostname = opts.Hostname
+	il.domainname = opts.Domainname
 	il.ports = opts.PortMappings
 	il.ipAddress = opts.IPAddress
 	il.ip6Address = opts.IP6Address
 	il.networks = opts.NetworkSlice
 	il.macAddress = opts.MACAddress
+	il.dnsServers = opts.DNSServers
+	il.dnsSearchDomains = opts.DNSSearchDomains
+	il.dnsResolvConfOptions = opts.DNSResolvConfOptions
 }
 
 func dockercompatMounts(mountPoints []*mountutil.Processed) []dockercompat.MountPoint {
@@ -814,7 +894,7 @@ func writeCIDFile(path, id string) error {
 // generateLogConfig creates a LogConfig for the current container store
 func generateLogConfig(dataStore string, id string, logDriver string, logOpt []string, ns, address string) (logConfig logging.LogConfig, err error) {
 	var u *url.URL
-	if u, err = url.Parse(logDriver); err == nil && u.Scheme != "" {
+	if u, err = url.Parse(logDriver); err == nil && (u.Scheme != "" || logDriver == "none") {
 		logConfig.LogURI = logDriver
 	} else {
 		logConfig.Driver = logDriver

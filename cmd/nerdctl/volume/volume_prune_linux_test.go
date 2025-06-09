@@ -20,9 +20,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/containerd/nerdctl/mod/tigron/expect"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 func TestVolumePrune(t *testing.T) {
@@ -39,18 +41,18 @@ func TestVolumePrune(t *testing.T) {
 			"-v", namedBusy+":/namedbusyvolume",
 			"-v", anonIDBusy+":/anonbusyvolume", testutil.CommonImage)
 
-		data.Set("anonIDBusy", anonIDBusy)
-		data.Set("anonIDDangling", anonIDDangling)
-		data.Set("namedBusy", namedBusy)
-		data.Set("namedDangling", namedDangling)
+		data.Labels().Set("anonIDBusy", anonIDBusy)
+		data.Labels().Set("anonIDDangling", anonIDDangling)
+		data.Labels().Set("namedBusy", namedBusy)
+		data.Labels().Set("namedDangling", namedDangling)
 	}
 
 	var cleanup = func(data test.Data, helpers test.Helpers) {
 		helpers.Anyhow("rm", "-f", data.Identifier())
-		helpers.Anyhow("volume", "rm", "-f", data.Get("anonIDBusy"))
-		helpers.Anyhow("volume", "rm", "-f", data.Get("anonIDDangling"))
-		helpers.Anyhow("volume", "rm", "-f", data.Get("namedBusy"))
-		helpers.Anyhow("volume", "rm", "-f", data.Get("namedDangling"))
+		helpers.Anyhow("volume", "rm", "-f", data.Labels().Get("anonIDBusy"))
+		helpers.Anyhow("volume", "rm", "-f", data.Labels().Get("anonIDDangling"))
+		helpers.Anyhow("volume", "rm", "-f", data.Labels().Get("namedBusy"))
+		helpers.Anyhow("volume", "rm", "-f", data.Labels().Get("namedDangling"))
 	}
 
 	testCase := nerdtest.Setup()
@@ -66,16 +68,18 @@ func TestVolumePrune(t *testing.T) {
 			Command:     test.Command("volume", "prune", "-f"),
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					Output: test.All(
-						test.DoesNotContain(data.Get("anonIDBusy")),
-						test.Contains(data.Get("anonIDDangling")),
-						test.DoesNotContain(data.Get("namedBusy")),
-						test.DoesNotContain(data.Get("namedDangling")),
+					Output: expect.All(
+						expect.Contains(data.Labels().Get("anonIDDangling")),
+						expect.DoesNotContain(
+							data.Labels().Get("anonIDBusy"),
+							data.Labels().Get("namedBusy"),
+							data.Labels().Get("namedDangling"),
+						),
 						func(stdout string, info string, t *testing.T) {
-							helpers.Ensure("volume", "inspect", data.Get("anonIDBusy"))
-							helpers.Fail("volume", "inspect", data.Get("anonIDDangling"))
-							helpers.Ensure("volume", "inspect", data.Get("namedBusy"))
-							helpers.Ensure("volume", "inspect", data.Get("namedDangling"))
+							helpers.Ensure("volume", "inspect", data.Labels().Get("anonIDBusy"))
+							helpers.Fail("volume", "inspect", data.Labels().Get("anonIDDangling"))
+							helpers.Ensure("volume", "inspect", data.Labels().Get("namedBusy"))
+							helpers.Ensure("volume", "inspect", data.Labels().Get("namedDangling"))
 						},
 					),
 				}
@@ -89,16 +93,14 @@ func TestVolumePrune(t *testing.T) {
 			Command:     test.Command("volume", "prune", "-f", "--all"),
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					Output: test.All(
-						test.DoesNotContain(data.Get("anonIDBusy")),
-						test.Contains(data.Get("anonIDDangling")),
-						test.DoesNotContain(data.Get("namedBusy")),
-						test.Contains(data.Get("namedDangling")),
+					Output: expect.All(
+						expect.DoesNotContain(data.Labels().Get("anonIDBusy"), data.Labels().Get("namedBusy")),
+						expect.Contains(data.Labels().Get("anonIDDangling"), data.Labels().Get("namedDangling")),
 						func(stdout string, info string, t *testing.T) {
-							helpers.Ensure("volume", "inspect", data.Get("anonIDBusy"))
-							helpers.Fail("volume", "inspect", data.Get("anonIDDangling"))
-							helpers.Ensure("volume", "inspect", data.Get("namedBusy"))
-							helpers.Fail("volume", "inspect", data.Get("namedDangling"))
+							helpers.Ensure("volume", "inspect", data.Labels().Get("anonIDBusy"))
+							helpers.Fail("volume", "inspect", data.Labels().Get("anonIDDangling"))
+							helpers.Ensure("volume", "inspect", data.Labels().Get("namedBusy"))
+							helpers.Fail("volume", "inspect", data.Labels().Get("namedDangling"))
 						},
 					),
 				}

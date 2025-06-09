@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -41,21 +40,21 @@ import (
 	"github.com/containerd/nerdctl/v2/pkg/portutil"
 )
 
-func newComposePsCommand() *cobra.Command {
-	var composePsCommand = &cobra.Command{
+func psCommand() *cobra.Command {
+	var cmd = &cobra.Command{
 		Use:           "ps [flags] [SERVICE...]",
 		Short:         "List containers of services",
-		RunE:          composePsAction,
+		RunE:          psAction,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	composePsCommand.Flags().String("format", "table", "Format the output. Supported values: [table|json]")
-	composePsCommand.Flags().String("filter", "", "Filter matches containers based on given conditions")
-	composePsCommand.Flags().StringArray("status", []string{}, "Filter services by status. Values: [paused | restarting | removing | running | dead | created | exited]")
-	composePsCommand.Flags().BoolP("quiet", "q", false, "Only display container IDs")
-	composePsCommand.Flags().Bool("services", false, "Display services")
-	composePsCommand.Flags().BoolP("all", "a", false, "Show all containers (default shows just running)")
-	return composePsCommand
+	cmd.Flags().String("format", "table", "Format the output. Supported values: [table|json]")
+	cmd.Flags().String("filter", "", "Filter matches containers based on given conditions")
+	cmd.Flags().StringArray("status", []string{}, "Filter services by status. Values: [paused | restarting | removing | running | dead | created | exited]")
+	cmd.Flags().BoolP("quiet", "q", false, "Only display container IDs")
+	cmd.Flags().Bool("services", false, "Display services")
+	cmd.Flags().BoolP("all", "a", false, "Show all containers (default shows just running)")
+	return cmd
 }
 
 type composeContainerPrintable struct {
@@ -74,7 +73,7 @@ type composeContainerPrintable struct {
 	Ports      string `json:"-"`
 }
 
-func composePsAction(cmd *cobra.Command, args []string) error {
+func psAction(cmd *cobra.Command, args []string) error {
 	globalOptions, err := helpers.ProcessRootCmdFlags(cmd)
 	if err != nil {
 		return err
@@ -345,10 +344,6 @@ func formatPublishers(labelMap map[string]string) []PortPublisher {
 
 // statusForFilter returns the status value to be matched with the 'status' filter
 func statusForFilter(ctx context.Context, c containerd.Container) string {
-	// Just in case, there is something wrong in server.
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
 	task, err := c.Task(ctx, nil)
 	if err != nil {
 		// NOTE: NotFound doesn't mean that container hasn't started.

@@ -32,6 +32,7 @@ import (
 
 	"github.com/containerd/nerdctl/v2/pkg/api/types"
 	"github.com/containerd/nerdctl/v2/pkg/infoutil"
+	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/dockercompat"
 	"github.com/containerd/nerdctl/v2/pkg/rootlessutil"
 )
 
@@ -41,7 +42,7 @@ type customMemoryOptions struct {
 	disableOOMKiller  *bool
 }
 
-func generateCgroupOpts(id string, options types.ContainerCreateOptions) ([]oci.SpecOpts, error) {
+func generateCgroupOpts(id string, options types.ContainerCreateOptions, internalLabels *internalLabels) ([]oci.SpecOpts, error) {
 	if options.KernelMemory != "" {
 		log.L.Warnf("The --kernel-memory flag is no longer supported. This flag is a noop.")
 	}
@@ -100,6 +101,19 @@ func generateCgroupOpts(id string, options types.ContainerCreateOptions) ([]oci.
 	if options.CPUSetMems != "" {
 		opts = append(opts, oci.WithCPUsMems(options.CPUSetMems))
 	}
+
+	if options.CPURealtimePeriod != 0 || options.CPURealtimeRuntime != 0 {
+		if !infoutil.CPURealtime(options.GOptions.CgroupManager) {
+			// CPU realtime scheduling is not supported in cgroup V2
+			return nil, errors.New("kernel does not support CPU real-time scheduler")
+		}
+
+		if options.CPURealtimePeriod != 0 && options.CPURealtimeRuntime != 0 &&
+			options.CPURealtimeRuntime > options.CPURealtimePeriod {
+			return nil, errors.New("cpu real-time runtime cannot be higher than cpu real-time period")
+		}
+	}
+	opts = append(opts, oci.WithCPURT(int64(options.CPURealtimeRuntime), options.CPURealtimePeriod))
 
 	var mem64 int64
 	if options.Memory != "" {
@@ -179,14 +193,11 @@ func generateCgroupOpts(id string, options types.ContainerCreateOptions) ([]oci.
 	}
 	opts = append(opts, withUnified(unifieds))
 
-	if options.BlkioWeight != 0 && !infoutil.BlockIOWeight(options.GOptions.CgroupManager) {
-		log.L.Warn("kernel support for cgroup blkio weight missing, weight discarded")
-		options.BlkioWeight = 0
+	blkioOpts, err := BlkioOCIOpts(options)
+	if err != nil {
+		return nil, err
 	}
-	if options.BlkioWeight > 0 && options.BlkioWeight < 10 || options.BlkioWeight > 1000 {
-		return nil, errors.New("range of blkio weight is from 10 to 1000")
-	}
-	opts = append(opts, withBlkioWeight(options.BlkioWeight))
+	opts = append(opts, blkioOpts...)
 
 	switch options.Cgroupns {
 	case "private":
@@ -206,6 +217,11 @@ func generateCgroupOpts(id string, options types.ContainerCreateOptions) ([]oci.
 			return nil, fmt.Errorf("failed to parse device %q: %w", f, err)
 		}
 		opts = append(opts, oci.WithDevices(devPath, conPath, mode))
+		var deviceMap dockercompat.DeviceMapping
+		deviceMap.PathOnHost = devPath
+		deviceMap.PathInContainer = conPath
+		deviceMap.CgroupPermissions = mode
+		internalLabels.deviceMapping = append(internalLabels.deviceMapping, deviceMap)
 	}
 
 	return opts, nil
@@ -304,16 +320,6 @@ func withUnified(unified map[string]string) oci.SpecOpts {
 		for k, v := range unified {
 			s.Linux.Resources.Unified[k] = v
 		}
-		return nil
-	}
-}
-
-func withBlkioWeight(blkioWeight uint16) oci.SpecOpts {
-	return func(_ context.Context, _ oci.Client, _ *containers.Container, s *oci.Spec) error {
-		if blkioWeight == 0 {
-			return nil
-		}
-		s.Linux.Resources.BlockIO = &specs.LinuxBlockIO{Weight: &blkioWeight}
 		return nil
 	}
 }

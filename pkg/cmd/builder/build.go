@@ -120,14 +120,14 @@ func Build(ctx context.Context, client *containerd.Client, options types.Builder
 		imageService := client.ImageService()
 		image, err := imageService.Get(ctx, tags[0])
 		if err != nil {
-			return fmt.Errorf("unable to tag image: %s", err)
+			return fmt.Errorf("unable to tag image: %w", err)
 		}
 		for _, targetRef := range tags[1:] {
 			image.Name = targetRef
 			if _, err := imageService.Create(ctx, image); err != nil {
 				// if already exists; skip.
 				if errors.Is(err, errdefs.ErrAlreadyExists) {
-					if err = imageService.Delete(ctx, targetRef); err != nil {
+					if err = imageService.Delete(ctx, targetRef, images.SynchronousDelete()); err != nil {
 						return err
 					}
 					if _, err = imageService.Create(ctx, image); err != nil {
@@ -135,7 +135,7 @@ func Build(ctx context.Context, client *containerd.Client, options types.Builder
 					}
 					continue
 				}
-				return fmt.Errorf("unable to tag image: %s", err)
+				return fmt.Errorf("unable to tag image: %w", err)
 			}
 		}
 	}

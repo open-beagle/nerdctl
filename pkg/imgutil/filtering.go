@@ -158,8 +158,7 @@ func FilterByCreatedAt(ctx context.Context, client *containerd.Client, before []
 				return []images.Image{}, err
 			}
 			if len(beforeImages) == 0 {
-				//nolint:stylecheck
-				return []images.Image{}, fmt.Errorf("No such image: %s", fetchImageNames(before))
+				return []images.Image{}, fmt.Errorf("no such image: %s", fetchImageNames(before))
 			}
 			maxTime = beforeImages[0].CreatedAt
 			for _, image := range beforeImages {
@@ -175,8 +174,7 @@ func FilterByCreatedAt(ctx context.Context, client *containerd.Client, before []
 				return []images.Image{}, err
 			}
 			if len(sinceImages) == 0 {
-				//nolint:stylecheck
-				return []images.Image{}, fmt.Errorf("No such image: %s", fetchImageNames(since))
+				return []images.Image{}, fmt.Errorf("no such image: %s", fetchImageNames(since))
 			}
 			minTime = sinceImages[0].CreatedAt
 			for _, image := range sinceImages {
@@ -324,6 +322,11 @@ func matchesAllLabels(imageCfgLabels map[string]string, filterLabels map[string]
 
 func matchesReferences(image images.Image, referencePatterns []string) (bool, error) {
 	var matches int
+
+	// Containerd returns ":" for dangling untagged images - see https://github.com/containerd/nerdctl/issues/3852
+	if image.Name == ":" {
+		return false, nil
+	}
 
 	parsedReference, err := referenceutil.Parse(image.Name)
 	if err != nil {

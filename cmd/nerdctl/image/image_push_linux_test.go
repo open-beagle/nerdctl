@@ -25,9 +25,11 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/testregistry"
 )
 
@@ -37,7 +39,7 @@ func TestPush(t *testing.T) {
 	var registryNoAuthHTTPRandom, registryNoAuthHTTPDefault, registryTokenAuthHTTPSRandom *testregistry.RegistryServer
 
 	testCase := &test.Case{
-		Require: test.Linux,
+		Require: require.Linux,
 
 		Setup: func(data test.Data, helpers test.Helpers) {
 			base := testutil.NewBase(t)
@@ -65,36 +67,36 @@ func TestPush(t *testing.T) {
 					helpers.Ensure("pull", "--quiet", testutil.CommonImage)
 					testImageRef := fmt.Sprintf("%s:%d/%s:%s",
 						registryNoAuthHTTPRandom.IP.String(), registryNoAuthHTTPRandom.Port, data.Identifier(), strings.Split(testutil.CommonImage, ":")[1])
-					data.Set("testImageRef", testImageRef)
+					data.Labels().Set("testImageRef", testImageRef)
 					helpers.Ensure("tag", testutil.CommonImage, testImageRef)
 				},
 				Cleanup: func(data test.Data, helpers test.Helpers) {
-					if data.Get("testImageRef") != "" {
-						helpers.Anyhow("rmi", "-f", data.Get("testImageRef"))
+					if data.Labels().Get("testImageRef") != "" {
+						helpers.Anyhow("rmi", "-f", data.Labels().Get("testImageRef"))
 					}
 				},
 				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-					return helpers.Command("push", data.Get("testImageRef"))
+					return helpers.Command("push", data.Labels().Get("testImageRef"))
 				},
 				Expected: test.Expects(1, []error{errors.New("server gave HTTP response to HTTPS client")}, nil),
 			},
 			{
 				Description: "plain http with insecure",
-				Require:     test.Not(nerdtest.Docker),
+				Require:     require.Not(nerdtest.Docker),
 				Setup: func(data test.Data, helpers test.Helpers) {
 					helpers.Ensure("pull", "--quiet", testutil.CommonImage)
 					testImageRef := fmt.Sprintf("%s:%d/%s:%s",
 						registryNoAuthHTTPRandom.IP.String(), registryNoAuthHTTPRandom.Port, data.Identifier(), strings.Split(testutil.CommonImage, ":")[1])
-					data.Set("testImageRef", testImageRef)
+					data.Labels().Set("testImageRef", testImageRef)
 					helpers.Ensure("tag", testutil.CommonImage, testImageRef)
 				},
 				Cleanup: func(data test.Data, helpers test.Helpers) {
-					if data.Get("testImageRef") != "" {
-						helpers.Anyhow("rmi", "-f", data.Get("testImageRef"))
+					if data.Labels().Get("testImageRef") != "" {
+						helpers.Anyhow("rmi", "-f", data.Labels().Get("testImageRef"))
 					}
 				},
 				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-					return helpers.Command("push", "--insecure-registry", data.Get("testImageRef"))
+					return helpers.Command("push", "--insecure-registry", data.Labels().Get("testImageRef"))
 				},
 				Expected: test.Expects(0, nil, nil),
 			},
@@ -104,97 +106,97 @@ func TestPush(t *testing.T) {
 					helpers.Ensure("pull", "--quiet", testutil.CommonImage)
 					testImageRef := fmt.Sprintf("%s:%d/%s:%s",
 						"127.0.0.1", registryNoAuthHTTPRandom.Port, data.Identifier(), strings.Split(testutil.CommonImage, ":")[1])
-					data.Set("testImageRef", testImageRef)
+					data.Labels().Set("testImageRef", testImageRef)
 					helpers.Ensure("tag", testutil.CommonImage, testImageRef)
 				},
 				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-					return helpers.Command("push", data.Get("testImageRef"))
+					return helpers.Command("push", data.Labels().Get("testImageRef"))
 				},
 				Expected: test.Expects(0, nil, nil),
 			},
 			{
 				Description: "plain http with insecure, default port",
-				Require:     test.Not(nerdtest.Docker),
+				Require:     require.Not(nerdtest.Docker),
 				Setup: func(data test.Data, helpers test.Helpers) {
 					helpers.Ensure("pull", "--quiet", testutil.CommonImage)
 					testImageRef := fmt.Sprintf("%s/%s:%s",
 						registryNoAuthHTTPDefault.IP.String(), data.Identifier(), strings.Split(testutil.CommonImage, ":")[1])
-					data.Set("testImageRef", testImageRef)
+					data.Labels().Set("testImageRef", testImageRef)
 					helpers.Ensure("tag", testutil.CommonImage, testImageRef)
 				},
 				Cleanup: func(data test.Data, helpers test.Helpers) {
-					if data.Get("testImageRef") != "" {
-						helpers.Anyhow("rmi", "-f", data.Get("testImageRef"))
+					if data.Labels().Get("testImageRef") != "" {
+						helpers.Anyhow("rmi", "-f", data.Labels().Get("testImageRef"))
 					}
 				},
 				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-					return helpers.Command("push", "--insecure-registry", data.Get("testImageRef"))
+					return helpers.Command("push", "--insecure-registry", data.Labels().Get("testImageRef"))
 				},
 				Expected: test.Expects(0, nil, nil),
 			},
 			{
 				Description: "with insecure, with login",
-				Require:     test.Not(nerdtest.Docker),
+				Require:     require.Not(nerdtest.Docker),
 				Setup: func(data test.Data, helpers test.Helpers) {
 					helpers.Ensure("pull", "--quiet", testutil.CommonImage)
 					testImageRef := fmt.Sprintf("%s:%d/%s:%s",
 						registryTokenAuthHTTPSRandom.IP.String(), registryTokenAuthHTTPSRandom.Port, data.Identifier(), strings.Split(testutil.CommonImage, ":")[1])
-					data.Set("testImageRef", testImageRef)
+					data.Labels().Set("testImageRef", testImageRef)
 					helpers.Ensure("tag", testutil.CommonImage, testImageRef)
 					helpers.Ensure("--insecure-registry", "login", "-u", "admin", "-p", "badmin",
 						fmt.Sprintf("%s:%d", registryTokenAuthHTTPSRandom.IP.String(), registryTokenAuthHTTPSRandom.Port))
 
 				},
 				Cleanup: func(data test.Data, helpers test.Helpers) {
-					if data.Get("testImageRef") != "" {
-						helpers.Anyhow("rmi", "-f", data.Get("testImageRef"))
+					if data.Labels().Get("testImageRef") != "" {
+						helpers.Anyhow("rmi", "-f", data.Labels().Get("testImageRef"))
 					}
 				},
 				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-					return helpers.Command("push", "--insecure-registry", data.Get("testImageRef"))
+					return helpers.Command("push", "--insecure-registry", data.Labels().Get("testImageRef"))
 				},
 				Expected: test.Expects(0, nil, nil),
 			},
 			{
 				Description: "with hosts dir, with login",
-				Require:     test.Not(nerdtest.Docker),
+				Require:     require.Not(nerdtest.Docker),
 				Setup: func(data test.Data, helpers test.Helpers) {
 					helpers.Ensure("pull", "--quiet", testutil.CommonImage)
 					testImageRef := fmt.Sprintf("%s:%d/%s:%s",
 						registryTokenAuthHTTPSRandom.IP.String(), registryTokenAuthHTTPSRandom.Port, data.Identifier(), strings.Split(testutil.CommonImage, ":")[1])
-					data.Set("testImageRef", testImageRef)
+					data.Labels().Set("testImageRef", testImageRef)
 					helpers.Ensure("tag", testutil.CommonImage, testImageRef)
 					helpers.Ensure("--hosts-dir", registryTokenAuthHTTPSRandom.HostsDir, "login", "-u", "admin", "-p", "badmin",
 						fmt.Sprintf("%s:%d", registryTokenAuthHTTPSRandom.IP.String(), registryTokenAuthHTTPSRandom.Port))
 
 				},
 				Cleanup: func(data test.Data, helpers test.Helpers) {
-					if data.Get("testImageRef") != "" {
-						helpers.Anyhow("rmi", "-f", data.Get("testImageRef"))
+					if data.Labels().Get("testImageRef") != "" {
+						helpers.Anyhow("rmi", "-f", data.Labels().Get("testImageRef"))
 					}
 				},
 				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-					return helpers.Command("push", "--hosts-dir", registryTokenAuthHTTPSRandom.HostsDir, data.Get("testImageRef"))
+					return helpers.Command("push", "--hosts-dir", registryTokenAuthHTTPSRandom.HostsDir, data.Labels().Get("testImageRef"))
 				},
 				Expected: test.Expects(0, nil, nil),
 			},
 			{
 				Description: "non distributable artifacts",
-				Require:     test.Not(nerdtest.Docker),
+				Require:     require.Not(nerdtest.Docker),
 				Setup: func(data test.Data, helpers test.Helpers) {
 					helpers.Ensure("pull", "--quiet", testutil.NonDistBlobImage)
 					testImageRef := fmt.Sprintf("%s:%d/%s:%s",
 						registryNoAuthHTTPRandom.IP.String(), registryNoAuthHTTPRandom.Port, data.Identifier(), strings.Split(testutil.NonDistBlobImage, ":")[1])
-					data.Set("testImageRef", testImageRef)
+					data.Labels().Set("testImageRef", testImageRef)
 					helpers.Ensure("tag", testutil.NonDistBlobImage, testImageRef)
 				},
 				Cleanup: func(data test.Data, helpers test.Helpers) {
-					if data.Get("testImageRef") != "" {
-						helpers.Anyhow("rmi", "-f", data.Get("testImageRef"))
+					if data.Labels().Get("testImageRef") != "" {
+						helpers.Anyhow("rmi", "-f", data.Labels().Get("testImageRef"))
 					}
 				},
 				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-					return helpers.Command("push", "--insecure-registry", data.Get("testImageRef"))
+					return helpers.Command("push", "--insecure-registry", data.Labels().Get("testImageRef"))
 				},
 				Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 					return &test.Expected{
@@ -212,21 +214,21 @@ func TestPush(t *testing.T) {
 			},
 			{
 				Description: "non distributable artifacts (with)",
-				Require:     test.Not(nerdtest.Docker),
+				Require:     require.Not(nerdtest.Docker),
 				Setup: func(data test.Data, helpers test.Helpers) {
 					helpers.Ensure("pull", "--quiet", testutil.NonDistBlobImage)
 					testImageRef := fmt.Sprintf("%s:%d/%s:%s",
 						registryNoAuthHTTPRandom.IP.String(), registryNoAuthHTTPRandom.Port, data.Identifier(), strings.Split(testutil.NonDistBlobImage, ":")[1])
-					data.Set("testImageRef", testImageRef)
+					data.Labels().Set("testImageRef", testImageRef)
 					helpers.Ensure("tag", testutil.NonDistBlobImage, testImageRef)
 				},
 				Cleanup: func(data test.Data, helpers test.Helpers) {
-					if data.Get("testImageRef") != "" {
-						helpers.Anyhow("rmi", "-f", data.Get("testImageRef"))
+					if data.Labels().Get("testImageRef") != "" {
+						helpers.Anyhow("rmi", "-f", data.Labels().Get("testImageRef"))
 					}
 				},
 				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-					return helpers.Command("push", "--insecure-registry", "--allow-nondistributable-artifacts", data.Get("testImageRef"))
+					return helpers.Command("push", "--insecure-registry", "--allow-nondistributable-artifacts", data.Labels().Get("testImageRef"))
 				},
 				Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 					return &test.Expected{
@@ -244,24 +246,24 @@ func TestPush(t *testing.T) {
 			},
 			{
 				Description: "soci",
-				Require: test.Require(
+				Require: require.All(
 					nerdtest.Soci,
-					test.Not(nerdtest.Docker),
+					require.Not(nerdtest.Docker),
 				),
 				Setup: func(data test.Data, helpers test.Helpers) {
 					helpers.Ensure("pull", "--quiet", testutil.UbuntuImage)
 					testImageRef := fmt.Sprintf("%s:%d/%s:%s",
 						registryNoAuthHTTPRandom.IP.String(), registryNoAuthHTTPRandom.Port, data.Identifier(), strings.Split(testutil.UbuntuImage, ":")[1])
-					data.Set("testImageRef", testImageRef)
+					data.Labels().Set("testImageRef", testImageRef)
 					helpers.Ensure("tag", testutil.UbuntuImage, testImageRef)
 				},
 				Cleanup: func(data test.Data, helpers test.Helpers) {
-					if data.Get("testImageRef") != "" {
-						helpers.Anyhow("rmi", "-f", data.Get("testImageRef"))
+					if data.Labels().Get("testImageRef") != "" {
+						helpers.Anyhow("rmi", "-f", data.Labels().Get("testImageRef"))
 					}
 				},
 				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-					return helpers.Command("push", "--snapshotter=soci", "--insecure-registry", "--soci-span-size=2097152", "--soci-min-layer-size=20971520", data.Get("testImageRef"))
+					return helpers.Command("push", "--snapshotter=soci", "--insecure-registry", "--soci-span-size=2097152", "--soci-min-layer-size=20971520", data.Labels().Get("testImageRef"))
 				},
 				Expected: test.Expects(0, nil, nil),
 			},

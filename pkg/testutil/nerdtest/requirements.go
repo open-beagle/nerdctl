@@ -25,11 +25,13 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	"github.com/containerd/nerdctl/v2/pkg/buildkitutil"
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/dockercompat"
 	"github.com/containerd/nerdctl/v2/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest/platform"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 var BuildkitHost test.ConfigKey = "BuildkitHost"
@@ -94,7 +96,7 @@ var IsFlaky = func(issueLink string) *test.Requirement {
 }
 
 // Docker marks a test as suitable solely for Docker and not Nerdctl
-// Generally used as test.Not(nerdtest.Docker), which of course it the opposite
+// Generally used as require.Not(nerdtest.Docker), which of course it the opposite
 var Docker = &test.Requirement{
 	Check: func(data test.Data, helpers test.Helpers) (ret bool, mess string) {
 		ret = getTarget() == targetDocker
@@ -151,7 +153,7 @@ var Rootless = &test.Requirement{
 }
 
 // Rootful marks a test as suitable only for rootful env
-var Rootful = test.Not(Rootless)
+var Rootful = require.Not(Rootless)
 
 // CGroup requires that cgroup is enabled
 var CGroup = &test.Requirement{
@@ -171,7 +173,7 @@ var CGroup = &test.Requirement{
 	},
 }
 
-var CgroupsAccessible = test.Require(
+var CgroupsAccessible = require.All(
 	CGroup,
 	&test.Requirement{
 		Check: func(data test.Data, helpers test.Helpers) (ret bool, mess string) {
@@ -187,6 +189,28 @@ var CgroupsAccessible = test.Require(
 		},
 	},
 )
+
+// CGroupV2 requires that cgroup is enabled and cgroup version is 2
+var CGroupV2 = &test.Requirement{
+	Check: func(data test.Data, helpers test.Helpers) (ret bool, mess string) {
+		ret = true
+		mess = "cgroup is enabled"
+		stdout := helpers.Capture("info", "--format", "{{ json . }}")
+		var dinf dockercompat.Info
+		err := json.Unmarshal([]byte(stdout), &dinf)
+		assert.NilError(helpers.T(), err, "failed to parse docker info")
+		switch dinf.CgroupDriver {
+		case "none", "":
+			ret = false
+			mess = "cgroup is none"
+		}
+		if dinf.CgroupVersion != "2" {
+			ret = false
+			mess = "cgroup version is not 2"
+		}
+		return ret, mess
+	},
+}
 
 // Soci requires that the soci snapshotter is enabled
 var Soci = &test.Requirement{
@@ -229,9 +253,9 @@ var Stargz = &test.Requirement{
 }
 
 // Registry marks a test as requiring a registry to be deployed
-var Registry = test.Require(
+var Registry = require.All(
 	// Registry requires Linux currently
-	test.Linux,
+	require.Linux,
 	(func() *test.Requirement {
 		// Provisional: see note in cleanup
 		// var reg *registry.Server
@@ -307,7 +331,7 @@ var IPFS = &test.Requirement{
 		// FIXME: we should be able to access the env (at least through helpers.Command().) instead of this gym
 		helpers.Write(ipfs, enabled)
 		// FIXME: this is incomplete. We obviously need a daemon running, properly configured
-		return test.Binary("ipfs").Check(data, helpers)
+		return require.Binary("ipfs").Check(data, helpers)
 	},
 }
 
@@ -318,7 +342,7 @@ var Private = &test.Requirement{
 		// We need this to happen NOW and not in setup, as otherwise cleanup with operate on the default namespace
 		namespace := data.Identifier("private")
 		helpers.Write(Namespace, test.ConfigValue(namespace))
-		data.Set("_deletenamespace", namespace)
+		data.Labels().Set("_deletenamespace", namespace)
 		// FIXME: is this necessary? Should NoParallel be subsumed into config?
 		helpers.Write(modePrivate, enabled)
 		return true, "private mode creates a dedicated namespace for nerdctl, and disable parallelism for docker"
@@ -332,7 +356,7 @@ var Private = &test.Requirement{
 				helpers.Ensure(append([]string{"rm", "-f"}, strings.Split(containerList, "\n")...)...)
 			}
 			helpers.Ensure("system", "prune", "-f", "--all", "--volumes")
-			helpers.Anyhow("namespace", "remove", data.Get("_deletenamespace"))
+			helpers.Anyhow("namespace", "remove", data.Labels().Get("_deletenamespace"))
 		}
 	},
 }

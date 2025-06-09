@@ -17,17 +17,22 @@
 package image
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
+
+	"github.com/containerd/log"
 
 	"github.com/containerd/nerdctl/v2/cmd/nerdctl/completion"
 	"github.com/containerd/nerdctl/v2/cmd/nerdctl/helpers"
 	"github.com/containerd/nerdctl/v2/pkg/api/types"
 	"github.com/containerd/nerdctl/v2/pkg/clientutil"
 	"github.com/containerd/nerdctl/v2/pkg/cmd/image"
+	"github.com/containerd/nerdctl/v2/pkg/formatter"
 )
 
-func newImageInspectCommand() *cobra.Command {
-	var imageInspectCommand = &cobra.Command{
+func inspectCommand() *cobra.Command {
+	cmd := &cobra.Command{
 		Use:               "inspect [flags] IMAGE [IMAGE...]",
 		Args:              cobra.MinimumNArgs(1),
 		Short:             "Display detailed information on one or more images.",
@@ -37,24 +42,24 @@ func newImageInspectCommand() *cobra.Command {
 		SilenceUsage:      true,
 		SilenceErrors:     true,
 	}
-	imageInspectCommand.Flags().String("mode", "dockercompat", `Inspect mode, "dockercompat" for Docker-compatible output, "native" for containerd-native output`)
-	imageInspectCommand.RegisterFlagCompletionFunc("mode", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	cmd.Flags().String("mode", "dockercompat", `Inspect mode, "dockercompat" for Docker-compatible output, "native" for containerd-native output`)
+	cmd.RegisterFlagCompletionFunc("mode", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return []string{"dockercompat", "native"}, cobra.ShellCompDirectiveNoFileComp
 	})
-	imageInspectCommand.Flags().StringP("format", "f", "", "Format the output using the given Go template, e.g, '{{json .}}'")
-	imageInspectCommand.RegisterFlagCompletionFunc("format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	cmd.Flags().StringP("format", "f", "", "Format the output using the given Go template, e.g, '{{json .}}'")
+	cmd.RegisterFlagCompletionFunc("format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return []string{"json"}, cobra.ShellCompDirectiveNoFileComp
 	})
 
 	// #region platform flags
-	imageInspectCommand.Flags().String("platform", "", "Inspect a specific platform") // not a slice, and there is no --all-platforms
-	imageInspectCommand.RegisterFlagCompletionFunc("platform", completion.Platforms)
+	cmd.Flags().String("platform", "", "Inspect a specific platform") // not a slice, and there is no --all-platforms
+	cmd.RegisterFlagCompletionFunc("platform", completion.Platforms)
 	// #endregion
 
-	return imageInspectCommand
+	return cmd
 }
 
-func ProcessImageInspectOptions(cmd *cobra.Command, platform *string) (types.ImageInspectOptions, error) {
+func InspectOptions(cmd *cobra.Command, platform *string) (types.ImageInspectOptions, error) {
 	globalOptions, err := helpers.ProcessRootCmdFlags(cmd)
 	if err != nil {
 		return types.ImageInspectOptions{}, err
@@ -84,9 +89,14 @@ func ProcessImageInspectOptions(cmd *cobra.Command, platform *string) (types.Ima
 }
 
 func imageInspectAction(cmd *cobra.Command, args []string) error {
-	options, err := ProcessImageInspectOptions(cmd, nil)
+	options, err := InspectOptions(cmd, nil)
 	if err != nil {
 		return err
+	}
+
+	// Verify we have a valid mode
+	if options.Mode != "native" && options.Mode != "dockercompat" {
+		return fmt.Errorf("unknown mode %q", options.Mode)
 	}
 
 	client, ctx, cancel, err := clientutil.NewClientWithPlatform(cmd.Context(), options.GOptions.Namespace, options.GOptions.Address, options.Platform)
@@ -95,7 +105,18 @@ func imageInspectAction(cmd *cobra.Command, args []string) error {
 	}
 	defer cancel()
 
-	return image.Inspect(ctx, client, args, options)
+	entries, err := image.Inspect(ctx, client, args, options)
+	if err != nil {
+		return err
+	}
+
+	// Display
+	if len(entries) > 0 {
+		if formatErr := formatter.FormatSlice(options.Format, options.Stdout, entries); formatErr != nil {
+			log.G(ctx).Error(formatErr)
+		}
+	}
+	return err
 }
 
 func imageInspectShellComplete(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {

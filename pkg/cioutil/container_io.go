@@ -148,7 +148,7 @@ func NewContainerIO(namespace string, logURI string, tty bool, stdin io.Reader, 
 			stderrWriters = append(stderrWriters, stderr)
 		}
 
-		if runtime.GOOS != "windows" {
+		if runtime.GOOS != "windows" && logURI != "" && logURI != "none" {
 			// starting logging binary logic is from https://github.com/containerd/containerd/blob/194a1fdd2cde35bc019ef138f30485e27fe0913e/cmd/containerd-shim-runc-v2/process/io.go#L247
 			stdoutr, stdoutw, err := os.Pipe()
 			if err != nil {
@@ -176,7 +176,7 @@ func NewContainerIO(namespace string, logURI string, tty bool, stdin io.Reader, 
 			cmd.ExtraFiles = append(cmd.ExtraFiles, stdoutr, stderrr, w)
 
 			if err := cmd.Start(); err != nil {
-				return nil, fmt.Errorf("failed to start binary process with cmdArgs %v: %w", cmd.Args, err)
+				return nil, fmt.Errorf("failed to start binary process with cmdArgs %v (logURI: %s): %w", cmd.Args, logURI, err)
 			}
 
 			closers = append(closers, func() error { return cmd.Process.Kill() })

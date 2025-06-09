@@ -25,9 +25,12 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/containerd/nerdctl/mod/tigron/expect"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 func TestLoadStdinFromPipe(t *testing.T) {
@@ -35,12 +38,12 @@ func TestLoadStdinFromPipe(t *testing.T) {
 
 	testCase := &test.Case{
 		Description: "TestLoadStdinFromPipe",
-		Require:     test.Linux,
+		Require:     require.Linux,
 		Setup: func(data test.Data, helpers test.Helpers) {
 			identifier := data.Identifier()
 			helpers.Ensure("pull", "--quiet", testutil.CommonImage)
 			helpers.Ensure("tag", testutil.CommonImage, identifier)
-			helpers.Ensure("save", identifier, "-o", filepath.Join(data.TempDir(), "common.tar"))
+			helpers.Ensure("save", identifier, "-o", filepath.Join(data.Temp().Path(), "common.tar"))
 			helpers.Ensure("rmi", "-f", identifier)
 		},
 		Cleanup: func(data test.Data, helpers test.Helpers) {
@@ -48,16 +51,16 @@ func TestLoadStdinFromPipe(t *testing.T) {
 		},
 		Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 			cmd := helpers.Command("load")
-			reader, err := os.Open(filepath.Join(data.TempDir(), "common.tar"))
+			reader, err := os.Open(filepath.Join(data.Temp().Path(), "common.tar"))
 			assert.NilError(t, err, "failed to open common.tar")
-			cmd.WithStdin(reader)
+			cmd.Feed(reader)
 			return cmd
 		},
 		Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 			identifier := data.Identifier()
 			return &test.Expected{
-				Output: test.All(
-					test.Contains(fmt.Sprintf("Loaded image: %s:latest", identifier)),
+				Output: expect.All(
+					expect.Contains(fmt.Sprintf("Loaded image: %s:latest", identifier)),
 					func(stdout string, info string, t *testing.T) {
 						assert.Assert(t, strings.Contains(helpers.Capture("images"), identifier))
 					},
@@ -74,7 +77,7 @@ func TestLoadStdinEmpty(t *testing.T) {
 
 	testCase := &test.Case{
 		Description: "TestLoadStdinEmpty",
-		Require:     test.Linux,
+		Require:     require.Linux,
 		Command:     test.Command("load"),
 		Expected:    test.Expects(1, nil, nil),
 	}
@@ -89,22 +92,22 @@ func TestLoadQuiet(t *testing.T) {
 		Description: "TestLoadQuiet",
 		Setup: func(data test.Data, helpers test.Helpers) {
 			identifier := data.Identifier()
-			helpers.Ensure("pull", testutil.CommonImage)
+			helpers.Ensure("pull", "--quiet", testutil.CommonImage)
 			helpers.Ensure("tag", testutil.CommonImage, identifier)
-			helpers.Ensure("save", identifier, "-o", filepath.Join(data.TempDir(), "common.tar"))
+			helpers.Ensure("save", identifier, "-o", filepath.Join(data.Temp().Path(), "common.tar"))
 			helpers.Ensure("rmi", "-f", identifier)
 		},
 		Cleanup: func(data test.Data, helpers test.Helpers) {
 			helpers.Anyhow("rmi", "-f", data.Identifier())
 		},
 		Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-			return helpers.Command("load", "--quiet", "--input", filepath.Join(data.TempDir(), "common.tar"))
+			return helpers.Command("load", "--quiet", "--input", filepath.Join(data.Temp().Path(), "common.tar"))
 		},
 		Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 			return &test.Expected{
-				Output: test.All(
-					test.Contains(fmt.Sprintf("Loaded image: %s:latest", data.Identifier())),
-					test.DoesNotContain("Loading layer"),
+				Output: expect.All(
+					expect.Contains(fmt.Sprintf("Loaded image: %s:latest", data.Identifier())),
+					expect.DoesNotContain("Loading layer"),
 				),
 			}
 		},

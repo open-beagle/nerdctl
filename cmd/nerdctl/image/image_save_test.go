@@ -25,10 +25,13 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/containerd/nerdctl/mod/tigron/expect"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	testhelpers "github.com/containerd/nerdctl/v2/cmd/nerdctl/helpers"
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 func TestSaveContent(t *testing.T) {
@@ -36,18 +39,18 @@ func TestSaveContent(t *testing.T) {
 
 	testCase := &test.Case{
 		// FIXME: move to busybox for windows?
-		Require: test.Not(test.Windows),
+		Require: require.Not(require.Windows),
 		Setup: func(data test.Data, helpers test.Helpers) {
 			helpers.Ensure("pull", "--quiet", testutil.CommonImage)
 		},
 		Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-			return helpers.Command("save", "-o", filepath.Join(data.TempDir(), "out.tar"), testutil.CommonImage)
+			return helpers.Command("save", "-o", filepath.Join(data.Temp().Path(), "out.tar"), testutil.CommonImage)
 		},
 		Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 			return &test.Expected{
 				Output: func(stdout string, info string, t *testing.T) {
-					rootfsPath := filepath.Join(data.TempDir(), "rootfs")
-					err := testhelpers.ExtractDockerArchive(filepath.Join(data.TempDir(), "out.tar"), rootfsPath)
+					rootfsPath := filepath.Join(data.Temp().Path(), "rootfs")
+					err := testhelpers.ExtractDockerArchive(filepath.Join(data.Temp().Path(), "out.tar"), rootfsPath)
 					assert.NilError(t, err)
 					etcOSReleasePath := filepath.Join(rootfsPath, "/etc/os-release")
 					etcOSReleaseBytes, err := os.ReadFile(etcOSReleasePath)
@@ -80,8 +83,8 @@ func TestSave(t *testing.T) {
 			Description: "Single image, by id",
 			NoParallel:  true,
 			Cleanup: func(data test.Data, helpers test.Helpers) {
-				if data.Get("id") != "" {
-					helpers.Anyhow("rmi", "-f", data.Get("id"))
+				if data.Labels().Get("id") != "" {
+					helpers.Anyhow("rmi", "-f", data.Labels().Get("id"))
 				}
 			},
 			Setup: func(data test.Data, helpers test.Helpers) {
@@ -94,23 +97,23 @@ func TestSave(t *testing.T) {
 				} else {
 					id = strings.Split(img.RepoDigests[0], ":")[1]
 				}
-				tarPath := filepath.Join(data.TempDir(), "out.tar")
+				tarPath := filepath.Join(data.Temp().Path(), "out.tar")
 				helpers.Ensure("save", "-o", tarPath, id)
 				helpers.Ensure("rmi", "-f", testutil.CommonImage)
 				helpers.Ensure("load", "-i", tarPath)
-				data.Set("id", id)
+				data.Labels().Set("id", id)
 			},
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-				return helpers.Command("run", "--rm", data.Get("id"), "sh", "-euxc", "echo foo")
+				return helpers.Command("run", "--rm", data.Labels().Get("id"), "sh", "-euxc", "echo foo")
 			},
-			Expected: test.Expects(0, nil, test.Equals("foo\n")),
+			Expected: test.Expects(0, nil, expect.Equals("foo\n")),
 		},
 		{
 			Description: "Image with different names, by id",
 			NoParallel:  true,
 			Cleanup: func(data test.Data, helpers test.Helpers) {
-				if data.Get("id") != "" {
-					helpers.Anyhow("rmi", "-f", data.Get("id"))
+				if data.Labels().Get("id") != "" {
+					helpers.Anyhow("rmi", "-f", data.Labels().Get("id"))
 				}
 			},
 			Setup: func(data test.Data, helpers test.Helpers) {
@@ -123,16 +126,16 @@ func TestSave(t *testing.T) {
 					id = strings.Split(img.RepoDigests[0], ":")[1]
 				}
 				helpers.Ensure("tag", testutil.CommonImage, data.Identifier())
-				tarPath := filepath.Join(data.TempDir(), "out.tar")
+				tarPath := filepath.Join(data.Temp().Path(), "out.tar")
 				helpers.Ensure("save", "-o", tarPath, id)
 				helpers.Ensure("rmi", "-f", testutil.CommonImage)
 				helpers.Ensure("load", "-i", tarPath)
-				data.Set("id", id)
+				data.Labels().Set("id", id)
 			},
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-				return helpers.Command("run", "--rm", data.Get("id"), "sh", "-euxc", "echo foo")
+				return helpers.Command("run", "--rm", data.Labels().Get("id"), "sh", "-euxc", "echo foo")
 			},
-			Expected: test.Expects(0, nil, test.Equals("foo\n")),
+			Expected: test.Expects(0, nil, expect.Equals("foo\n")),
 		},
 	}
 
@@ -158,8 +161,8 @@ func TestSaveMultipleImagesWithSameIDAndLoad(t *testing.T) {
 			Description: "Issue #3568 - Save multiple container images with the same image ID but different image names",
 			NoParallel:  true,
 			Cleanup: func(data test.Data, helpers test.Helpers) {
-				if data.Get("id") != "" {
-					helpers.Anyhow("rmi", "-f", data.Get("id"))
+				if data.Labels().Get("id") != "" {
+					helpers.Anyhow("rmi", "-f", data.Labels().Get("id"))
 				}
 			},
 			Setup: func(data test.Data, helpers test.Helpers) {
@@ -172,11 +175,11 @@ func TestSaveMultipleImagesWithSameIDAndLoad(t *testing.T) {
 					id = strings.Split(img.RepoDigests[0], ":")[1]
 				}
 				helpers.Ensure("tag", testutil.CommonImage, data.Identifier())
-				tarPath := filepath.Join(data.TempDir(), "out.tar")
+				tarPath := filepath.Join(data.Temp().Path(), "out.tar")
 				helpers.Ensure("save", "-o", tarPath, testutil.CommonImage, data.Identifier())
 				helpers.Ensure("rmi", "-f", id)
 				helpers.Ensure("load", "-i", tarPath)
-				data.Set("id", id)
+				data.Labels().Set("id", id)
 			},
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("images", "--no-trunc")
@@ -186,7 +189,7 @@ func TestSaveMultipleImagesWithSameIDAndLoad(t *testing.T) {
 					ExitCode: 0,
 					Errors:   []error{},
 					Output: func(stdout string, info string, t *testing.T) {
-						assert.Equal(t, strings.Count(stdout, data.Get("id")), 2)
+						assert.Equal(t, strings.Count(stdout, data.Labels().Get("id")), 2)
 					},
 				}
 			},

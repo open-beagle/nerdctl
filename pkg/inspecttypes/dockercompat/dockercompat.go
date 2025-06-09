@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/docker/go-connections/nat"
+	"github.com/docker/go-units"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -45,6 +46,7 @@ import (
 
 	"github.com/containerd/nerdctl/v2/pkg/imgutil"
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/native"
+	"github.com/containerd/nerdctl/v2/pkg/ipcutil"
 	"github.com/containerd/nerdctl/v2/pkg/labels"
 	"github.com/containerd/nerdctl/v2/pkg/ocihook/state"
 )
@@ -94,6 +96,13 @@ type ImageMetadata struct {
 	LastTagTime time.Time `json:",omitempty"`
 }
 
+type loggerLogConfig struct {
+	Driver  string            `json:"driver"`
+	Opts    map[string]string `json:"opts,omitempty"`
+	LogURI  string            `json:"-"`
+	Address string            `json:"address"`
+}
+
 // Container mimics a `docker container inspect` object.
 // From https://github.com/moby/moby/blob/v20.10.1/api/types/types.go#L340-L374
 type Container struct {
@@ -105,8 +114,8 @@ type Container struct {
 	Image          string
 	ResolvConfPath string
 	HostnamePath   string
-	// TODO: HostsPath      string
-	LogPath string
+	HostsPath      string
+	LogPath        string
 	// Unimplemented: Node            *ContainerNode `json:",omitempty"` // Node is only propagated by Docker Swarm standalone API
 	Name         string
 	RestartCount int
@@ -116,7 +125,7 @@ type Container struct {
 	// TODO: ProcessLabel    string
 	AppArmorProfile string
 	// TODO: ExecIDs         []string
-	// TODO: HostConfig      *container.HostConfig
+	HostConfig *HostConfig
 	// TODO: GraphDriver     GraphDriverData
 	SizeRw     *int64 `json:",omitempty"`
 	SizeRootFs *int64 `json:",omitempty"`
@@ -124,6 +133,55 @@ type Container struct {
 	Mounts          []MountPoint
 	Config          *Config
 	NetworkSettings *NetworkSettings
+}
+
+// From https://github.com/moby/moby/blob/8dbd90ec00daa26dc45d7da2431c965dec99e8b4/api/types/container/host_config.go#L391
+// HostConfig the non-portable Config structure of a container.
+type HostConfig struct {
+	// Binds           []string      // List of volume bindings for this container
+	ContainerIDFile string          // File (path) where the containerId is written
+	LogConfig       loggerLogConfig // Configuration of the logs for this container
+	// NetworkMode     NetworkMode   // Network mode to use for the container
+	PortBindings nat.PortMap // Port mapping between the exposed port (container) and the host
+	// RestartPolicy   RestartPolicy // Restart policy to be used for the container
+	// AutoRemove      bool          // Automatically remove container when it exits
+	// VolumeDriver    string        // Name of the volume driver used to mount volumes
+	// VolumesFrom     []string      // List of volumes to take from other container
+	// CapAdd          strslice.StrSlice // List of kernel capabilities to add to the container
+	// CapDrop         strslice.StrSlice // List of kernel capabilities to remove from the container
+
+	CgroupnsMode string   // Cgroup namespace mode to use for the container
+	DNS          []string `json:"Dns"`        // List of DNS server to lookup
+	DNSOptions   []string `json:"DnsOptions"` // List of DNSOption to look for
+	DNSSearch    []string `json:"DnsSearch"`  // List of DNSSearch to look for
+	ExtraHosts   []string // List of extra hosts
+	GroupAdd     []string // GroupAdd specifies additional groups to join
+	IpcMode      string   `json:"IpcMode"` // IPC namespace to use for the container
+	// Cgroup          CgroupSpec        // Cgroup to use for the container
+	OomScoreAdj int    // specifies the tune container’s OOM preferences (-1000 to 1000, rootless: 100 to 1000)
+	PidMode     string // PID namespace to use for the container
+	// Privileged      bool              // Is the container in privileged mode
+	// PublishAllPorts bool              // Should docker publish all exposed port for the container
+	ReadonlyRootfs bool // Is the container root filesystem in read-only
+	// SecurityOpt     []string          // List of string values to customize labels for MLS systems, such as SELinux.
+	Tmpfs   map[string]string `json:"Tmpfs,omitempty"` // List of tmpfs (mounts) used for the container
+	UTSMode string            // UTS namespace to use for the container
+	// UsernsMode      UsernsMode        // The user namespace to use for the container
+	ShmSize            int64             // Size of /dev/shm in bytes. The size must be greater than 0.
+	Sysctls            map[string]string // List of Namespaced sysctls used for the container
+	Runtime            string            // Runtime to use with this container
+	CPUSetMems         string            `json:"CpusetMems"`         // CpusetMems 0-2, 0,1
+	CPUSetCPUs         string            `json:"CpusetCpus"`         // CpusetCpus 0-2, 0,1
+	CPUQuota           int64             `json:"CpuQuota"`           // CPU CFS (Completely Fair Scheduler) quota
+	CPUShares          uint64            `json:"CpuShares"`          // CPU shares (relative weight vs. other containers)
+	CPUPeriod          uint64            `json:"CpuPeriod"`          // Limits the CPU CFS (Completely Fair Scheduler) period
+	CPURealtimePeriod  uint64            `json:"CpuRealtimePeriod"`  // Limits the CPU real-time period in microseconds
+	CPURealtimeRuntime int64             `json:"CpuRealtimeRuntime"` // Limits the CPU real-time runtime in microseconds
+	Memory             int64             // Memory limit (in bytes)
+	MemorySwap         int64             // Total memory usage (memory + swap); set `-1` to enable unlimited swap
+	OomKillDisable     bool              // specifies whether to disable OOM Killer
+	Devices            []DeviceMapping   // List of devices to map inside the container
+	LinuxBlkioSettings
 }
 
 // From https://github.com/moby/moby/blob/v20.10.1/api/types/types.go#L416-L427
@@ -142,8 +200,8 @@ type MountPoint struct {
 
 // config is from https://github.com/moby/moby/blob/8dbd90ec00daa26dc45d7da2431c965dec99e8b4/api/types/container/config.go#L37-L69
 type Config struct {
-	Hostname string `json:",omitempty"` // Hostname
-	// TODO: Domainname   string      // Domainname
+	Hostname    string `json:",omitempty"` // Hostname
+	Domainname  string `json:",omitempty"` // Domainname
 	User        string `json:",omitempty"` // User that will run the command(s) inside the container, also support user:group
 	AttachStdin bool   // Attach the standard input, makes possible user interaction
 	// TODO: AttachStdout bool        // Attach the standard output
@@ -191,6 +249,34 @@ type NetworkSettings struct {
 	Networks map[string]*NetworkEndpointSettings
 }
 
+type DNSSettings struct {
+	DNSServers           []string
+	DNSResolvConfOptions []string
+	DNSSearchDomains     []string
+}
+
+type HostConfigLabel struct {
+	BlkioWeight uint16
+	CidFile     string
+	Devices     []DeviceMapping
+}
+
+type DeviceMapping struct {
+	PathOnHost        string
+	PathInContainer   string
+	CgroupPermissions string
+}
+
+type CPUSettings struct {
+	CPUSetCpus         string
+	CPUSetMems         string
+	CPUShares          uint64
+	CPUQuota           int64
+	CPUPeriod          uint64
+	CPURealtimePeriod  uint64
+	CPURealtimeRuntime int64
+}
+
 // DefaultNetworkSettings is from https://github.com/moby/moby/blob/v20.10.1/api/types/types.go#L405-L414
 type DefaultNetworkSettings struct {
 	// TODO EndpointID          string // EndpointID uniquely represents a service endpoint in a Sandbox
@@ -222,6 +308,15 @@ type NetworkEndpointSettings struct {
 	// TODO DriverOpts          map[string]string
 }
 
+type LinuxBlkioSettings struct {
+	BlkioWeight          uint16 // Block IO weight (relative weight vs. other containers)
+	BlkioWeightDevice    []*specs.LinuxWeightDevice
+	BlkioDeviceReadBps   []*specs.LinuxThrottleDevice
+	BlkioDeviceWriteBps  []*specs.LinuxThrottleDevice
+	BlkioDeviceReadIOps  []*specs.LinuxThrottleDevice
+	BlkioDeviceWriteIOps []*specs.LinuxThrottleDevice
+}
+
 // ContainerFromNative instantiates a Docker-compatible Container from containerd-native Container.
 func ContainerFromNative(n *native.Container) (*Container, error) {
 	var hostname string
@@ -234,6 +329,7 @@ func ContainerFromNative(n *native.Container) (*Container, error) {
 		// XXX is this always right? what if the container OS is NOT the same as the host OS?
 		Platform: runtime.GOOS, // for Docker compatibility, this Platform string does NOT contain arch like "/amd64"
 	}
+	c.HostConfig = new(HostConfig)
 	if n.Labels[restart.StatusLabel] == string(containerd.Running) {
 		c.RestartCount, _ = strconv.Atoi(n.Labels[restart.CountLabel])
 	}
@@ -255,6 +351,8 @@ func ContainerFromNative(n *native.Container) (*Container, error) {
 				c.ResolvConfPath = mount.Source
 			} else if mount.Destination == "/etc/hostname" {
 				c.HostnamePath = mount.Source
+			} else if mount.Destination == "/etc/hosts" {
+				c.HostsPath = mount.Source
 			}
 		}
 		hostname = sp.Hostname
@@ -272,14 +370,79 @@ func ContainerFromNative(n *native.Container) (*Container, error) {
 		if _, err := os.Stat(c.LogPath); err != nil {
 			c.LogPath = ""
 		}
+		hostsPath := filepath.Join(nerdctlStateDir, "hosts")
+		if _, err := os.Stat(hostsPath); err == nil {
+			c.HostsPath = hostsPath
+		}
 	}
 
+	c.HostConfig.Tmpfs = make(map[string]string)
 	if nerdctlMounts := n.Labels[labels.Mounts]; nerdctlMounts != "" {
 		mounts, err := parseMounts(nerdctlMounts)
 		if err != nil {
 			return nil, err
 		}
 		c.Mounts = mounts
+		for _, mount := range mounts {
+			if mount.Type == "tmpfs" {
+				c.HostConfig.Tmpfs[mount.Destination] = mount.Mode
+			}
+		}
+	}
+
+	if nedctlExtraHosts := n.Labels[labels.ExtraHosts]; nedctlExtraHosts != "" {
+		c.HostConfig.ExtraHosts = parseExtraHosts(nedctlExtraHosts)
+	}
+
+	if nerdctlLoguri := n.Labels[labels.LogURI]; nerdctlLoguri != "" {
+		c.HostConfig.LogConfig.LogURI = nerdctlLoguri
+	}
+	if logConfigJSON, ok := n.Labels[labels.LogConfig]; ok {
+		var logConfig loggerLogConfig
+		err := json.Unmarshal([]byte(logConfigJSON), &logConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal log config: %v", err)
+		}
+
+		// Assign the parsed LogConfig to c.HostConfig.LogConfig
+		c.HostConfig.LogConfig = logConfig
+	} else {
+		// If LogConfig label is not present, set default values
+		c.HostConfig.LogConfig = loggerLogConfig{
+			Driver: "json-file",
+			Opts:   make(map[string]string),
+		}
+	}
+
+	hostConfigLabel, err := getHostConfigLabelFromNative(n.Labels)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch HostConfigLabel: %v", err)
+	}
+
+	c.HostConfig.BlkioWeight = hostConfigLabel.BlkioWeight
+	c.HostConfig.ContainerIDFile = hostConfigLabel.CidFile
+
+	groupAdd, err := groupAddFromNative(n.Spec.(*specs.Spec))
+	if err != nil {
+		return nil, fmt.Errorf("failed to groupAdd from native spec: %v", err)
+	}
+
+	c.HostConfig.GroupAdd = groupAdd
+	c.HostConfig.ShmSize = 0
+
+	if ipcMode := n.Labels[labels.IPC]; ipcMode != "" {
+		ipc, err := ipcutil.DecodeIPCLabel(ipcMode)
+		if err != nil {
+			return nil, fmt.Errorf("failed to Decode IPC Label: %v", err)
+		}
+		c.HostConfig.IpcMode = string(ipc.Mode)
+		if ipc.ShmSize != "" {
+			shmSize, err := units.RAMInBytes(ipc.ShmSize)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse ShmSize: %v", err)
+			}
+			c.HostConfig.ShmSize = shmSize
+		}
 	}
 
 	cs := new(ContainerState)
@@ -308,7 +471,80 @@ func ContainerFromNative(n *native.Container) (*Container, error) {
 			return nil, err
 		}
 		c.NetworkSettings = nSettings
+		c.HostConfig.PortBindings = *nSettings.Ports
+	} else {
+		// n.process is not set if the container is not started, making the networkSetting null
+		// we should send an empty object even in this case inorder for it to be compatible with docker inspect response
+		nSettings, err := networkSettingsFromNative(nil, n.Spec.(*specs.Spec))
+		if err != nil {
+			return nil, err
+		}
+		c.NetworkSettings = nSettings
 	}
+
+	cpuSetting, err := cpuSettingsFromNative(n.Spec.(*specs.Spec))
+	if err != nil {
+		return nil, fmt.Errorf("failed to Decode cpuSetting: %v", err)
+	}
+	c.HostConfig.CPUSetCPUs = cpuSetting.CPUSetCpus
+	c.HostConfig.CPUSetMems = cpuSetting.CPUSetMems
+	c.HostConfig.CPUQuota = cpuSetting.CPUQuota
+	c.HostConfig.CPUShares = cpuSetting.CPUShares
+	c.HostConfig.CPUPeriod = cpuSetting.CPUPeriod
+	c.HostConfig.CPURealtimePeriod = cpuSetting.CPURealtimePeriod
+	c.HostConfig.CPURealtimeRuntime = cpuSetting.CPURealtimeRuntime
+
+	cgroupNamespace, err := getCgroupnsFromNative(n.Spec.(*specs.Spec))
+	if err != nil {
+		return nil, fmt.Errorf("failed to Decode cgroupNamespace: %v", err)
+	}
+	c.HostConfig.CgroupnsMode = cgroupNamespace
+
+	memorySettings, err := getMemorySettingsFromNative(n.Spec.(*specs.Spec))
+	if err != nil {
+		return nil, fmt.Errorf("failed to Decode memory Settings: %v", err)
+	}
+
+	c.HostConfig.OomKillDisable = memorySettings.DisableOOMKiller
+	c.HostConfig.Memory = memorySettings.Limit
+	c.HostConfig.MemorySwap = memorySettings.Swap
+
+	dnsSettings, err := getDNSFromNative(n.Labels)
+	if err != nil {
+		return nil, fmt.Errorf("failed to Decode dns Settings: %v", err)
+	}
+
+	c.HostConfig.DNS = dnsSettings.DNSServers
+	c.HostConfig.DNSOptions = dnsSettings.DNSResolvConfOptions
+	c.HostConfig.DNSSearch = dnsSettings.DNSSearchDomains
+
+	oomScoreAdj, err := getOomScoreAdjFromNative(n.Spec.(*specs.Spec))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get OomScoreAdj value: %v", err)
+	}
+	c.HostConfig.OomScoreAdj = oomScoreAdj
+
+	c.HostConfig.ReadonlyRootfs = false
+	if n.Spec.(*specs.Spec).Root != nil && n.Spec.(*specs.Spec).Root.Readonly {
+		c.HostConfig.ReadonlyRootfs = n.Spec.(*specs.Spec).Root.Readonly
+	}
+
+	utsMode, err := getUtsModeFromNative(n.Spec.(*specs.Spec))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get UtsMode value: %v", err)
+	}
+	c.HostConfig.UTSMode = utsMode
+
+	sysctls, err := getSysctlFromNative(n.Spec.(*specs.Spec))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get UtsMode value: %v", err)
+	}
+	c.HostConfig.Sysctls = sysctls
+
+	if n.Runtime.Name != "" {
+		c.HostConfig.Runtime = n.Runtime.Name
+	}
+
 	c.State = cs
 	c.Config = &Config{
 		Labels: n.Labels,
@@ -317,6 +553,32 @@ func ContainerFromNative(n *native.Container) (*Container, error) {
 		hostname = n.Labels[labels.Hostname]
 	}
 	c.Config.Hostname = hostname
+
+	if n.Labels[labels.Domainname] != "" {
+		c.Config.Domainname = n.Labels[labels.Domainname]
+	}
+
+	c.HostConfig.Devices = hostConfigLabel.Devices
+
+	var pidMode string
+	if n.Labels[labels.PIDContainer] != "" {
+		pidMode = n.Labels[labels.PIDContainer]
+	}
+	c.HostConfig.PidMode = pidMode
+
+	if err := getBlkioSettingsFromSpec(n.Spec.(*specs.Spec), c.HostConfig); err != nil {
+		return nil, fmt.Errorf("failed to get blkio settings: %w", err)
+	}
+
+	if n.Spec != nil {
+		if spec, ok := n.Spec.(*specs.Spec); ok && spec.Process != nil {
+			c.Config.Env = spec.Process.Env
+		}
+	}
+
+	if n.Labels[labels.User] != "" {
+		c.Config.User = n.Labels[labels.User]
+	}
 
 	return c, nil
 }
@@ -340,7 +602,9 @@ func ImageFromNative(nativeImage *native.Image) (*Image, error) {
 
 	if len(imgOCI.History) > 0 {
 		image.Comment = imgOCI.History[len(imgOCI.History)-1].Comment
-		image.Created = imgOCI.History[len(imgOCI.History)-1].Created.Format(time.RFC3339Nano)
+		if !imgOCI.History[len(imgOCI.History)-1].Created.IsZero() {
+			image.Created = imgOCI.History[len(imgOCI.History)-1].Created.Format(time.RFC3339Nano)
+		}
 		image.Author = imgOCI.History[len(imgOCI.History)-1].Author
 	}
 
@@ -473,6 +737,62 @@ func networkSettingsFromNative(n *native.NetNS, sp *specs.Spec) (*NetworkSetting
 	return res, nil
 }
 
+func cpuSettingsFromNative(sp *specs.Spec) (*CPUSettings, error) {
+	res := &CPUSettings{}
+	if sp.Linux != nil && sp.Linux.Resources != nil && sp.Linux.Resources.CPU != nil {
+		if sp.Linux.Resources.CPU.Cpus != "" {
+			res.CPUSetCpus = sp.Linux.Resources.CPU.Cpus
+		}
+
+		if sp.Linux.Resources.CPU.Mems != "" {
+			res.CPUSetMems = sp.Linux.Resources.CPU.Mems
+		}
+
+		if sp.Linux.Resources.CPU.Shares != nil && *sp.Linux.Resources.CPU.Shares > 0 {
+			res.CPUShares = *sp.Linux.Resources.CPU.Shares
+		}
+
+		if sp.Linux.Resources.CPU.Quota != nil && *sp.Linux.Resources.CPU.Quota > 0 {
+			res.CPUQuota = *sp.Linux.Resources.CPU.Quota
+		}
+		if sp.Linux.Resources.CPU.Period != nil && *sp.Linux.Resources.CPU.Period > 0 {
+			res.CPUPeriod = *sp.Linux.Resources.CPU.Period
+		}
+		if sp.Linux.Resources.CPU.RealtimePeriod != nil && *sp.Linux.Resources.CPU.RealtimePeriod > 0 {
+			res.CPURealtimePeriod = *sp.Linux.Resources.CPU.RealtimePeriod
+		}
+		if sp.Linux.Resources.CPU.RealtimeRuntime != nil && *sp.Linux.Resources.CPU.RealtimeRuntime > 0 {
+			res.CPURealtimeRuntime = *sp.Linux.Resources.CPU.RealtimeRuntime
+		}
+	}
+
+	return res, nil
+}
+
+func getCgroupnsFromNative(sp *specs.Spec) (string, error) {
+	res := ""
+	if sp.Linux != nil && len(sp.Linux.Namespaces) != 0 {
+		for _, ns := range sp.Linux.Namespaces {
+			if ns.Type == "cgroup" {
+				res = "private"
+			}
+		}
+	}
+	return res, nil
+}
+
+func groupAddFromNative(sp *specs.Spec) ([]string, error) {
+	res := []string{}
+	if sp.Process != nil && sp.Process.User.AdditionalGids != nil {
+		for _, gid := range sp.Process.User.AdditionalGids {
+			if gid != 0 {
+				res = append(res, strconv.FormatUint(uint64(gid), 10))
+			}
+		}
+	}
+	return res, nil
+}
+
 func convertToNatPort(portMappings []cni.PortMapping) (*nat.PortMap, error) {
 	portMap := make(nat.PortMap)
 	for _, portMapping := range portMappings {
@@ -491,6 +811,83 @@ func convertToNatPort(portMappings []cni.PortMapping) (*nat.PortMap, error) {
 	return &portMap, nil
 }
 
+func parseExtraHosts(extraHostsJSON string) []string {
+	var extraHosts []string
+	if err := json.Unmarshal([]byte(extraHostsJSON), &extraHosts); err != nil {
+		// Handle error or return empty slice
+		return []string{}
+	}
+	return extraHosts
+}
+
+func getMemorySettingsFromNative(sp *specs.Spec) (*MemorySetting, error) {
+	res := &MemorySetting{}
+	if sp.Linux != nil && sp.Linux.Resources != nil && sp.Linux.Resources.Memory != nil {
+		if sp.Linux.Resources.Memory.DisableOOMKiller != nil {
+			res.DisableOOMKiller = *sp.Linux.Resources.Memory.DisableOOMKiller
+		}
+
+		if sp.Linux.Resources.Memory.Limit != nil {
+			res.Limit = *sp.Linux.Resources.Memory.Limit
+		}
+
+		if sp.Linux.Resources.Memory.Swap != nil {
+			res.Swap = *sp.Linux.Resources.Memory.Swap
+		}
+	}
+	return res, nil
+}
+
+func getDNSFromNative(lbls map[string]string) (*DNSSettings, error) {
+	res := &DNSSettings{}
+
+	if dnsSettingJSON, ok := lbls[labels.DNSSetting]; ok {
+		if err := json.Unmarshal([]byte(dnsSettingJSON), &res); err != nil {
+			return nil, fmt.Errorf("failed to parse DNS settings: %v", err)
+		}
+	}
+
+	return res, nil
+}
+
+func getHostConfigLabelFromNative(lbls map[string]string) (*HostConfigLabel, error) {
+	res := &HostConfigLabel{}
+
+	if hostConfigLabelJSON, ok := lbls[labels.HostConfigLabel]; ok {
+		if err := json.Unmarshal([]byte(hostConfigLabelJSON), &res); err != nil {
+			return nil, fmt.Errorf("failed to parse DNS servers: %v", err)
+		}
+	}
+	return res, nil
+}
+
+func getOomScoreAdjFromNative(sp *specs.Spec) (int, error) {
+	var res int
+	if sp.Process != nil && sp.Process.OOMScoreAdj != nil {
+		res = *sp.Process.OOMScoreAdj
+	}
+	return res, nil
+}
+
+func getUtsModeFromNative(sp *specs.Spec) (string, error) {
+	if sp.Linux != nil && len(sp.Linux.Namespaces) > 0 {
+		for _, ns := range sp.Linux.Namespaces {
+			if ns.Type == "uts" {
+				return "", nil
+			}
+		}
+	}
+	return "host", nil
+}
+
+func getSysctlFromNative(sp *specs.Spec) (map[string]string, error) {
+	var res map[string]string
+	if sp.Linux != nil && sp.Linux.Sysctl != nil {
+		res = sp.Linux.Sysctl
+	}
+	return res, nil
+}
+
 type IPAMConfig struct {
 	Subnet  string `json:"Subnet,omitempty"`
 	Gateway string `json:"Gateway,omitempty"`
@@ -505,11 +902,20 @@ type IPAM struct {
 // Network mimics a `docker network inspect` object.
 // From https://github.com/moby/moby/blob/v20.10.7/api/types/types.go#L430-L448
 type Network struct {
-	Name   string            `json:"Name"`
-	ID     string            `json:"Id,omitempty"` // optional in nerdctl
-	IPAM   IPAM              `json:"IPAM,omitempty"`
-	Labels map[string]string `json:"Labels"`
+	Name       string                      `json:"Name"`
+	ID         string                      `json:"Id,omitempty"` // optional in nerdctl
+	IPAM       IPAM                        `json:"IPAM,omitempty"`
+	Labels     map[string]string           `json:"Labels"`
+	Containers map[string]EndpointResource `json:"Containers"` // Containers contains endpoints belonging to the network
 	// Scope, Driver, etc. are omitted
+}
+
+type EndpointResource struct {
+	Name string `json:"Name"`
+	// EndpointID  string `json:"EndpointID"`
+	// MacAddress  string `json:"MacAddress"`
+	// IPv4Address string `json:"IPv4Address"`
+	// IPv6Address string `json:"IPv6Address"`
 }
 
 type structuredCNI struct {
@@ -519,6 +925,12 @@ type structuredCNI struct {
 			Ranges [][]IPAMConfig `json:"ranges"`
 		} `json:"ipam"`
 	} `json:"plugins"`
+}
+
+type MemorySetting struct {
+	Limit            int64 `json:"limit"`
+	Swap             int64 `json:"swap"`
+	DisableOOMKiller bool  `json:"disableOOMKiller"`
 }
 
 func NetworkFromNative(n *native.Network) (*Network, error) {
@@ -543,6 +955,17 @@ func NetworkFromNative(n *native.Network) (*Network, error) {
 
 	if n.NerdctlLabels != nil {
 		res.Labels = *n.NerdctlLabels
+	}
+
+	res.Containers = make(map[string]EndpointResource)
+	for _, container := range n.Containers {
+		res.Containers[container.ID] = EndpointResource{
+			Name: container.Labels[labels.Name],
+			// EndpointID:  container.EndpointID,
+			// MacAddress:  container.MacAddress,
+			// IPv4Address: container.IPv4Address,
+			// IPv6Address: container.IPv6Address,
+		}
 	}
 
 	return &res, nil
@@ -570,4 +993,79 @@ func ParseMountProperties(option []string) (rw bool, propagation string) {
 		}
 	}
 	return
+}
+
+func getDefaultLinuxBlkioSettings() LinuxBlkioSettings {
+	return LinuxBlkioSettings{
+		BlkioWeight:          0,
+		BlkioWeightDevice:    make([]*specs.LinuxWeightDevice, 0),
+		BlkioDeviceReadBps:   make([]*specs.LinuxThrottleDevice, 0),
+		BlkioDeviceWriteBps:  make([]*specs.LinuxThrottleDevice, 0),
+		BlkioDeviceReadIOps:  make([]*specs.LinuxThrottleDevice, 0),
+		BlkioDeviceWriteIOps: make([]*specs.LinuxThrottleDevice, 0),
+	}
+}
+
+func getBlkioSettingsFromSpec(spec *specs.Spec, hostConfig *HostConfig) error {
+	if spec == nil {
+		return fmt.Errorf("spec cannot be nil")
+	}
+	if hostConfig == nil {
+		return fmt.Errorf("hostConfig cannot be nil")
+	}
+
+	// Initialize empty arrays by default
+	hostConfig.LinuxBlkioSettings = getDefaultLinuxBlkioSettings()
+
+	if spec.Linux == nil || spec.Linux.Resources == nil || spec.Linux.Resources.BlockIO == nil {
+		return nil
+	}
+
+	blockIO := spec.Linux.Resources.BlockIO
+
+	// Set block IO weight
+	if blockIO.Weight != nil {
+		hostConfig.BlkioWeight = *blockIO.Weight
+	}
+
+	// Set weight devices
+	if len(blockIO.WeightDevice) > 0 {
+		hostConfig.BlkioWeightDevice = make([]*specs.LinuxWeightDevice, len(blockIO.WeightDevice))
+		for i, dev := range blockIO.WeightDevice {
+			hostConfig.BlkioWeightDevice[i] = &dev
+		}
+	}
+
+	// Set throttle devices for read BPS
+	if len(blockIO.ThrottleReadBpsDevice) > 0 {
+		hostConfig.BlkioDeviceReadBps = make([]*specs.LinuxThrottleDevice, len(blockIO.ThrottleReadBpsDevice))
+		for i, dev := range blockIO.ThrottleReadBpsDevice {
+			hostConfig.BlkioDeviceReadBps[i] = &dev
+		}
+	}
+
+	// Set throttle devices for write BPS
+	if len(blockIO.ThrottleWriteBpsDevice) > 0 {
+		hostConfig.BlkioDeviceWriteBps = make([]*specs.LinuxThrottleDevice, len(blockIO.ThrottleWriteBpsDevice))
+		for i, dev := range blockIO.ThrottleWriteBpsDevice {
+			hostConfig.BlkioDeviceWriteBps[i] = &dev
+		}
+	}
+
+	// Set throttle devices for read IOPs
+	if len(blockIO.ThrottleReadIOPSDevice) > 0 {
+		hostConfig.BlkioDeviceReadIOps = make([]*specs.LinuxThrottleDevice, len(blockIO.ThrottleReadIOPSDevice))
+		for i, dev := range blockIO.ThrottleReadIOPSDevice {
+			hostConfig.BlkioDeviceReadIOps[i] = &dev
+		}
+	}
+
+	// Set throttle devices for write IOPs
+	if len(blockIO.ThrottleWriteIOPSDevice) > 0 {
+		hostConfig.BlkioDeviceWriteIOps = make([]*specs.LinuxThrottleDevice, len(blockIO.ThrottleWriteIOPSDevice))
+		for i, dev := range blockIO.ThrottleWriteIOPSDevice {
+			hostConfig.BlkioDeviceWriteIOps[i] = &dev
+		}
+	}
+	return nil
 }

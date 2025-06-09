@@ -24,7 +24,9 @@ import (
 	"testing"
 
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/expect"
 )
 
 func TestMyThing(t *testing.T) {
@@ -33,7 +35,7 @@ func TestMyThing(t *testing.T) {
 	// This is going to run `nerdctl info` (or `docker info`)
 	mytest.Command = test.Command("info")
     // Verify the command exits with 0, and stdout contains the word `Kernel`
-    myTest.Expected = test.Expects(0, nil, test.Contains("Kernel"))
+    myTest.Expected = test.Expects(0, nil, expect.Contains("Kernel"))
 	// Run it
 	myTest.Run(t)
 }
@@ -63,11 +65,11 @@ Secondly, `test.Contains` - which is a `Comparator`.
 
 ### Comparators
 
-Besides `test.Contains(string)`, there are a few more:
-- `test.DoesNotContain(string)`
-- `test.Equals(string)`
-- `test.Match(*regexp.Regexp)`
-- `test.All(comparators ...Comparator)`, which allows you to bundle together a bunch of other comparators
+Besides `expect.Contains(string)`, there are a few more:
+- `expect.DoesNotContain(string)`
+- `expect.Equals(string)`
+- `expect.Match(*regexp.Regexp)`
+- `expect.All(comparators ...Comparator)`, which allows you to bundle together a bunch of other comparators
 
 The following example shows how to implement your own custom `Comparator`
 (this is actually the `Equals` comparator).
@@ -80,7 +82,9 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/expect"
 )
 
 func MyComparator(compare string) test.Comparator {
@@ -105,7 +109,7 @@ that this name is then visible in the list of containers.
 
 To achieve that, you should write your own `Manager`, leveraging test `Data`.
 
-Here is an example, where we are using `data.Get("sometestdata")`.
+Here is an example, where we are using `data.Labels().Get("sometestdata")`.
 
 ```go
 package main
@@ -119,7 +123,9 @@ import (
 	"github.com/containerd/errdefs"
 
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/expect"
 )
 
 func TestMyThing(t *testing.T) {
@@ -127,7 +133,7 @@ func TestMyThing(t *testing.T) {
 
 	// Declare your test
 	myTest := &test.Case{
-		Data:        test.WithData("sometestdata", "blah"),
+		Data:        test.WithLabels(map[string]string{"sometestdata": "blah"}),
 		Command:     test.Command("info"),
 		Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 			return &test.Expected{
@@ -137,7 +143,7 @@ func TestMyThing(t *testing.T) {
 					errdefs.ErrNotFound,
 				},
 				Output: func(stdout string, info string, t *testing.T) {
-					assert.Assert(t, stdout == data.Get("sometestdata"), info)
+					assert.Assert(t, stdout == data.Labels().Get("sometestdata"), info)
 				},
 			}
 		},
@@ -151,7 +157,7 @@ func TestMyThing(t *testing.T) {
 
 `Data` is provided to allow storing mutable key-value information that pertain to the test.
 
-While it can be provided through `test.WithData(key string, value string)`,
+While it can be provided through `test.WithLabels(map[string]string{key: value})`,
 inside the testcase definition, it can also be dynamically manipulated inside `Setup`, or `Command`.
 
 Note that `Data` additionally exposes the following functions:
@@ -228,7 +234,9 @@ import (
 	"github.com/containerd/errdefs"
 
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/expect"
 )
 
 func TestMyThing(t *testing.T) {
@@ -236,9 +244,9 @@ func TestMyThing(t *testing.T) {
 
 	// Declare your test
 	myTest := &test.Case{
-		Data:        test.WithData("sometestdata", "blah"),
+		Data:        test.WithLabels(map[string]string{"sometestdata": "blah"}),
 		Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-			return helpers.Command("run", "--name", data.Get("sometestdata"))
+			return helpers.Command("run", "--name", data.Labels().Get("sometestdata"))
 		},
 		Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 			return &test.Expected{
@@ -248,7 +256,7 @@ func TestMyThing(t *testing.T) {
 					errdefs.ErrNotFound,
 				},
 				Output: func(stdout string, info string, t *testing.T) {
-					assert.Assert(t, stdout == data.Get("sometestdata"), info)
+					assert.Assert(t, stdout == data.Labels().Get("sometestdata"), info)
 				},
 			}
 		},
@@ -307,7 +315,9 @@ import (
 	"github.com/containerd/errdefs"
 
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/expect"
 )
 
 func TestMyThing(t *testing.T) {
@@ -315,7 +325,7 @@ func TestMyThing(t *testing.T) {
 
 	// Declare your test
 	myTest := &test.Case{
-		Data:        test.WithData("sometestdata", "blah"),
+		Data:        test.WithLabels(map[string]string{"sometestdata": "blah"}),
 		Setup: func(data *test.Data, helpers test.Helpers){
 			helpers.Ensure("volume", "create", "foo")
 			helpers.Ensure("volume", "create", "bar")
@@ -325,7 +335,7 @@ func TestMyThing(t *testing.T) {
 			helpers.Anyhow("volume", "rm", "bar")
 		},
 		Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-			return helpers.Command("run", "--name", data.Identifier()+data.Get("sometestdata"))
+			return helpers.Command("run", "--name", data.Identifier()+data.Labels().Get("sometestdata"))
 		},
 		Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 			return &test.Expected{
@@ -335,7 +345,7 @@ func TestMyThing(t *testing.T) {
 					errdefs.ErrNotFound,
 				},
 				Output: func(stdout string, info string, t *testing.T) {
-					assert.Assert(t, stdout == data.Get("sometestdata"), info)
+					assert.Assert(t, stdout == data.Labels().Get("sometestdata"), info)
 				},
 			}
 		},
@@ -375,15 +385,15 @@ expectations.
 
 Here are a few:
 ```go
-test.Windows // a test runs only on Windows (or Not(Windows))
-test.Linux // a test runs only on Linux
+require.Windows // a test runs only on Windows (or Not(Windows))
+require.Linux // a test runs only on Linux
 test.Darwin // a test runs only on Darwin
 test.OS(name string) // a test runs only on the OS `name`
-test.Binary(name string) // a test requires the bin `name` to be in the PATH
-test.Not(req Requirement) // a test runs only if the opposite of the requirement `req` is fulfilled
-test.Require(req ...Requirement) // a test runs only if all requirements are fulfilled
+require.Binary(name string) // a test requires the bin `name` to be in the PATH
+require.Not(req Requirement) // a test runs only if the opposite of the requirement `req` is fulfilled
+require.All(req ...Requirement) // a test runs only if all requirements are fulfilled
 
-nerdtest.Docker // a test only run on Docker - normally used with test.Not(nerdtest.Docker)
+nerdtest.Docker // a test only run on Docker - normally used with require.Not(nerdtest.Docker)
 nerdtest.Soci // a test requires the soci snapshotter
 nerdtest.Stargz // a test requires the stargz snapshotter
 nerdtest.Rootless // a test requires Rootless

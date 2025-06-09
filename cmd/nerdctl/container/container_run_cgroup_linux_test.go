@@ -21,21 +21,25 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
-	"github.com/moby/sys/userns"
 	"gotest.tools/v3/assert"
 
 	"github.com/containerd/cgroups/v3"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/continuity/testutil/loopback"
+	"github.com/containerd/nerdctl/mod/tigron/expect"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/test"
 
 	"github.com/containerd/nerdctl/v2/pkg/cmd/container"
 	"github.com/containerd/nerdctl/v2/pkg/idutil/containerwalker"
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 func TestRunCgroupV2(t *testing.T) {
@@ -178,7 +182,7 @@ func TestRunCgroupV1(t *testing.T) {
 func TestIssue3781(t *testing.T) {
 	t.Parallel()
 	testCase := nerdtest.Setup()
-	testCase.Require = test.Not(nerdtest.Docker)
+	testCase.Require = require.Not(nerdtest.Docker)
 
 	base := testutil.NewBase(t)
 	info := base.Info()
@@ -222,45 +226,99 @@ func TestIssue3781(t *testing.T) {
 }
 
 func TestRunDevice(t *testing.T) {
-	if os.Geteuid() != 0 || userns.RunningInUserNS() {
-		t.Skip("test requires the root in the initial user namespace")
-	}
+	testCase := nerdtest.Setup()
+
+	testCase.Require = nerdtest.Rootful
 
 	const n = 3
 	lo := make([]*loopback.Loopback, n)
-	loContent := make([]string, n)
 
-	for i := 0; i < n; i++ {
-		var err error
-		lo[i], err = loopback.New(4096)
-		assert.NilError(t, err)
-		t.Logf("lo[%d] = %+v", i, lo[i])
-		defer lo[i].Close()
-		loContent[i] = fmt.Sprintf("lo%d-content", i)
-		assert.NilError(t, os.WriteFile(lo[i].Device, []byte(loContent[i]), 0700))
+	testCase.Setup = func(data test.Data, helpers test.Helpers) {
+
+		for i := 0; i < n; i++ {
+			var err error
+			lo[i], err = loopback.New(4096)
+			assert.NilError(t, err)
+			t.Logf("lo[%d] = %+v", i, lo[i])
+			loContent := fmt.Sprintf("lo%d-content", i)
+			assert.NilError(t, os.WriteFile(lo[i].Device, []byte(loContent), 0o700))
+			data.Labels().Set("loContent"+strconv.Itoa(i), loContent)
+		}
+
+		// lo0 is readable but not writable.
+		// lo1 is readable and writable
+		// lo2 is not accessible.
+		helpers.Ensure("run",
+			"-d",
+			"--name", data.Identifier(),
+			"--device", lo[0].Device+":r",
+			"--device", lo[1].Device,
+			testutil.AlpineImage, "sleep", nerdtest.Infinity)
+		data.Labels().Set("id", data.Identifier())
 	}
 
-	base := testutil.NewBase(t)
-	containerName := testutil.Identifier(t)
-	defer base.Cmd("rm", "-f", containerName).AssertOK()
-	// lo0 is readable but not writable.
-	// lo1 is readable and writable
-	// lo2 is not accessible.
-	base.Cmd("run",
-		"-d",
-		"--name", containerName,
-		"--device", lo[0].Device+":r",
-		"--device", lo[1].Device,
-		testutil.AlpineImage, "sleep", nerdtest.Infinity).Run()
+	testCase.Cleanup = func(data test.Data, helpers test.Helpers) {
+		for i := 0; i < n; i++ {
+			if lo[i] != nil {
+				_ = lo[i].Close()
+			}
+		}
+		helpers.Anyhow("rm", "-f", data.Identifier())
+	}
 
-	base.Cmd("exec", containerName, "cat", lo[0].Device).AssertOutContains(loContent[0])
-	base.Cmd("exec", containerName, "cat", lo[1].Device).AssertOutContains(loContent[1])
-	base.Cmd("exec", containerName, "cat", lo[2].Device).AssertFail()
-	base.Cmd("exec", containerName, "sh", "-ec", "echo -n \"overwritten-lo0-content\">"+lo[0].Device).AssertFail()
-	base.Cmd("exec", containerName, "sh", "-ec", "echo -n \"overwritten-lo1-content\">"+lo[1].Device).AssertOK()
-	lo1Read, err := os.ReadFile(lo[1].Device)
-	assert.NilError(t, err)
-	assert.Equal(t, string(bytes.Trim(lo1Read, "\x00")), "overwritten-lo1-content")
+	testCase.SubTests = []*test.Case{
+		{
+			Description: "can read lo0",
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				return helpers.Command("exec", data.Labels().Get("id"), "cat", lo[0].Device)
+			},
+			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+				return &test.Expected{
+					Output: expect.Contains(data.Labels().Get("locontent0")),
+				}
+			},
+		},
+		{
+			Description: "cannot write lo0",
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				return helpers.Command("exec", data.Labels().Get("id"), "sh", "-ec", "echo -n \"overwritten-lo1-content\">"+lo[0].Device)
+			},
+			Expected: test.Expects(expect.ExitCodeGenericFail, nil, nil),
+		},
+		{
+			Description: "cannot read lo2",
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				return helpers.Command("exec", data.Labels().Get("id"), "cat", lo[2].Device)
+			},
+			Expected: test.Expects(expect.ExitCodeGenericFail, nil, nil),
+		},
+		{
+			Description: "can read lo1",
+			NoParallel:  true,
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				return helpers.Command("exec", data.Labels().Get("id"), "cat", lo[1].Device)
+			},
+			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+				return &test.Expected{
+					Output: expect.Contains(data.Labels().Get("locontent1")),
+				}
+			},
+		},
+		{
+			Description: "can write lo1 and read back updated value",
+			NoParallel:  true,
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				return helpers.Command("exec", data.Labels().Get("id"), "sh", "-ec", "echo -n \"overwritten-lo1-content\">"+lo[1].Device)
+			},
+			Expected: test.Expects(expect.ExitCodeSuccess, nil, func(stdout string, info string, t *testing.T) {
+				lo1Read, err := os.ReadFile(lo[1].Device)
+				assert.NilError(t, err)
+				assert.Equal(t, string(bytes.Trim(lo1Read, "\x00")), "overwritten-lo1-content")
+			}),
+		},
+	}
+
+	testCase.Run(t)
 }
 
 func TestParseDevice(t *testing.T) {
@@ -420,4 +478,229 @@ func TestRunBlkioWeightCgroupV2(t *testing.T) {
 	base.Cmd("exec", containerName, "cat", "io.bfq.weight").AssertOutExactly("default 300\n")
 	base.Cmd("update", containerName, "--blkio-weight", "400").AssertOK()
 	base.Cmd("exec", containerName, "cat", "io.bfq.weight").AssertOutExactly("default 400\n")
+}
+
+func TestRunBlkioSettingCgroupV2(t *testing.T) {
+	testCase := nerdtest.Setup()
+	testCase.Require = nerdtest.Rootful
+
+	// Create dummy device path
+	dummyDev := "/dev/dummy-zero"
+
+	testCase.Setup = func(data test.Data, helpers test.Helpers) {
+		// Create dummy device
+		helperCmd := exec.Command("mknod", dummyDev, "c", "1", "5")
+		if out, err := helperCmd.CombinedOutput(); err != nil {
+			t.Fatalf("cannot create %q: %q: %v", dummyDev, string(out), err)
+		}
+	}
+
+	testCase.Cleanup = func(data test.Data, helpers test.Helpers) {
+		// Clean up the dummy device
+		if err := exec.Command("rm", "-f", dummyDev).Run(); err != nil {
+			t.Logf("failed to remove device %s: %v", dummyDev, err)
+		}
+	}
+
+	testCase.SubTests = []*test.Case{
+		{
+			Description: "blkio-weight",
+			Require:     nerdtest.CGroupV2,
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				return helpers.Command("run", "-d", "--name", data.Identifier(),
+					"--blkio-weight", "150",
+					testutil.AlpineImage, "sleep", "infinity")
+			},
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Anyhow("rm", "-f", data.Identifier())
+			},
+			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+				return &test.Expected{
+					ExitCode: 0,
+					Output: expect.All(
+						func(stdout string, info string, t *testing.T) {
+							assert.Assert(t, strings.Contains(helpers.Capture("inspect", "--format", "{{.HostConfig.BlkioWeight}}", data.Identifier()), "150"))
+						},
+					),
+				}
+			},
+		},
+		{
+			Description: "blkio-weight-device",
+			Require:     nerdtest.CGroupV2,
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				return helpers.Command("run", "-d", "--name", data.Identifier(),
+					"--blkio-weight-device", dummyDev+":100",
+					testutil.AlpineImage, "sleep", "infinity")
+			},
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Anyhow("rm", "-f", data.Identifier())
+			},
+			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+				return &test.Expected{
+					ExitCode: 0,
+					Output: expect.All(
+						func(stdout string, info string, t *testing.T) {
+							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioWeightDevice}}{{.Weight}}{{end}}", data.Identifier())
+							assert.Assert(t, strings.Contains(inspectOut, "100"))
+						},
+					),
+				}
+			},
+		},
+		{
+			Description: "device-read-bps",
+			Require: require.All(
+				nerdtest.CGroupV2,
+				// Docker cli (v26.1.3) available in github runners has a bug where some of the blkio options
+				// do not work https://github.com/docker/cli/issues/5321. The fix has been merged to the latest releases
+				// but not currently available in the v26 release.
+				require.Not(nerdtest.Docker),
+			),
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				return helpers.Command("run", "-d", "--name", data.Identifier(),
+					"--device-read-bps", dummyDev+":1048576",
+					testutil.AlpineImage, "sleep", "infinity")
+			},
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Anyhow("rm", "-f", data.Identifier())
+			},
+			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+				return &test.Expected{
+					ExitCode: 0,
+					Output: expect.All(
+						func(stdout string, info string, t *testing.T) {
+							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceReadBps}}{{.Rate}}{{end}}", data.Identifier())
+							assert.Assert(t, strings.Contains(inspectOut, "1048576"))
+						},
+					),
+				}
+			},
+		},
+		{
+			Description: "device-write-bps",
+			Require: require.All(
+				nerdtest.CGroupV2,
+				// Docker cli (v26.1.3) available in github runners has a bug where some of the blkio options
+				// do not work https://github.com/docker/cli/issues/5321. The fix has been merged to the latest releases
+				// but not currently available in the v26 release.
+				require.Not(nerdtest.Docker),
+			),
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				return helpers.Command("run", "-d", "--name", data.Identifier(),
+					"--device-write-bps", dummyDev+":2097152",
+					testutil.AlpineImage, "sleep", "infinity")
+			},
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Anyhow("rm", "-f", data.Identifier())
+			},
+			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+				return &test.Expected{
+					ExitCode: 0,
+					Output: expect.All(
+						func(stdout string, info string, t *testing.T) {
+							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceWriteBps}}{{.Rate}}{{end}}", data.Identifier())
+							assert.Assert(t, strings.Contains(inspectOut, "2097152"))
+						},
+					),
+				}
+			},
+		},
+		{
+			Description: "device-read-iops",
+			Require: require.All(
+				nerdtest.CGroupV2,
+				// Docker cli (v26.1.3) available in github runners has a bug where some of the blkio options
+				// do not work https://github.com/docker/cli/issues/5321. The fix has been merged to the latest releases
+				// but not currently available in the v26 release.
+				require.Not(nerdtest.Docker),
+			),
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				return helpers.Command("run", "-d", "--name", data.Identifier(),
+					"--device-read-iops", dummyDev+":1000",
+					testutil.AlpineImage, "sleep", "infinity")
+			},
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Anyhow("rm", "-f", data.Identifier())
+			},
+			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+				return &test.Expected{
+					ExitCode: 0,
+					Output: expect.All(
+						func(stdout string, info string, t *testing.T) {
+							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceReadIOps}}{{.Rate}}{{end}}", data.Identifier())
+							assert.Assert(t, strings.Contains(inspectOut, "1000"))
+						},
+					),
+				}
+			},
+		},
+		{
+			Description: "device-write-iops",
+			Require: require.All(
+				nerdtest.CGroupV2,
+				// Docker cli (v26.1.3) available in github runners has a bug where some of the blkio options
+				// do not work https://github.com/docker/cli/issues/5321. The fix has been merged to the latest releases
+				// but not currently available in the v26 release.
+				require.Not(nerdtest.Docker),
+			),
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				return helpers.Command("run", "-d", "--name", data.Identifier(),
+					"--device-write-iops", dummyDev+":2000",
+					testutil.AlpineImage, "sleep", "infinity")
+			},
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Anyhow("rm", "-f", data.Identifier())
+			},
+			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+				return &test.Expected{
+					ExitCode: 0,
+					Output: expect.All(
+						func(stdout string, info string, t *testing.T) {
+							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceWriteIOps}}{{.Rate}}{{end}}", data.Identifier())
+							assert.Assert(t, strings.Contains(inspectOut, "2000"))
+						},
+					),
+				}
+			},
+		},
+	}
+
+	testCase.Run(t)
+}
+
+func TestRunCPURealTimeSettingCgroupV1(t *testing.T) {
+	nerdtest.Setup()
+
+	testCase := &test.Case{
+		Description: "cpu-rt-runtime-and-period",
+		Require: require.All(
+			require.Not(nerdtest.CGroupV2),
+			nerdtest.Rootful,
+		),
+		Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+			return helpers.Command("create", "--name", data.Identifier(),
+				"--cpu-rt-runtime", "950000",
+				"--cpu-rt-period", "1000000",
+				testutil.AlpineImage, "sleep", "infinity")
+		},
+		Cleanup: func(data test.Data, helpers test.Helpers) {
+			helpers.Anyhow("rm", "-f", data.Identifier())
+		},
+		Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+			return &test.Expected{
+				ExitCode: 0,
+				Output: expect.All(
+					func(stdout string, info string, t *testing.T) {
+						rtRuntime := helpers.Capture("inspect", "--format", "{{.HostConfig.CPURealtimeRuntime}}", data.Identifier())
+						rtPeriod := helpers.Capture("inspect", "--format", "{{.HostConfig.CPURealtimePeriod}}", data.Identifier())
+						assert.Assert(t, strings.Contains(rtRuntime, "950000"))
+						assert.Assert(t, strings.Contains(rtPeriod, "1000000"))
+					},
+				),
+			}
+		},
+	}
+
+	testCase.Run(t)
 }

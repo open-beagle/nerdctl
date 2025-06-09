@@ -25,9 +25,41 @@ import (
 
 	"github.com/moby/sys/userns"
 
-	"github.com/containerd/containerd/v2/pkg/apparmor"
 	"github.com/containerd/log"
 )
+
+var (
+	appArmorSupported bool
+	checkAppArmor     sync.Once
+)
+
+// hostSupports returns true if apparmor is enabled for the host
+// We cannot use containerd implementation because it explicitly prevents it from working inside a container.
+func hostSupports() bool {
+	checkAppArmor.Do(func() {
+		var pth string
+		if _, err := os.Stat("/sys/kernel/security/apparmor"); err != nil {
+			appArmorSupported = false
+			return
+		}
+		// In some rare circumstances, apparmor may be enabled, but the tooling could be missing
+		// containerd implementation shells out to aa-parser, so, require it here.
+		// See https://github.com/containerd/nerdctl/issues/3945 for details.
+		pth, err := exec.LookPath("apparmor_parser")
+		if err != nil {
+			appArmorSupported = false
+			return
+		}
+		if _, err = os.Stat(pth); err != nil {
+			appArmorSupported = false
+			return
+		}
+		var buf []byte
+		buf, err = os.ReadFile("/sys/module/apparmor/parameters/enabled")
+		appArmorSupported = err == nil && len(buf) == 2 && string(buf) == "Y\n"
+	})
+	return appArmorSupported
+}
 
 // CanLoadNewProfile returns whether the current process can load a new AppArmor profile.
 //
@@ -37,7 +69,7 @@ import (
 //
 // Related: https://gitlab.com/apparmor/apparmor/-/blob/v3.0.3/libraries/libapparmor/src/kernel.c#L311
 func CanLoadNewProfile() bool {
-	return !userns.RunningInUserNS() && os.Geteuid() == 0 && apparmor.HostSupports()
+	return !userns.RunningInUserNS() && os.Geteuid() == 0 && hostSupports()
 }
 
 var (
@@ -57,7 +89,7 @@ var (
 func CanApplyExistingProfile() bool {
 	paramEnabledOnce.Do(func() {
 		buf, err := os.ReadFile("/sys/module/apparmor/parameters/enabled")
-		paramEnabled = err == nil && len(buf) > 1 && buf[0] == 'Y'
+		paramEnabled = err == nil && len(buf) == 2 && string(buf) == "Y\n"
 	})
 	return paramEnabled
 }

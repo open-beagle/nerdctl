@@ -23,9 +23,12 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/containerd/nerdctl/mod/tigron/expect"
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 func TestSystemPrune(t *testing.T) {
@@ -45,12 +48,12 @@ func TestSystemPrune(t *testing.T) {
 				helpers.Ensure("run", "-v", fmt.Sprintf("%s:/volume", data.Identifier()),
 					"--net", data.Identifier(), "--name", data.Identifier(), testutil.CommonImage)
 
-				data.Set("anonIdentifier", anonIdentifier)
+				data.Labels().Set("anonIdentifier", anonIdentifier)
 			},
 			Cleanup: func(data test.Data, helpers test.Helpers) {
 				helpers.Anyhow("network", "rm", data.Identifier())
 				helpers.Anyhow("volume", "rm", data.Identifier())
-				helpers.Anyhow("volume", "rm", data.Get("anonIdentifier"))
+				helpers.Anyhow("volume", "rm", data.Labels().Get("anonIdentifier"))
 				helpers.Anyhow("rm", "-f", data.Identifier())
 			},
 			Command: test.Command("system", "prune", "-f", "--volumes", "--all"),
@@ -63,7 +66,7 @@ func TestSystemPrune(t *testing.T) {
 						images := helpers.Capture("images")
 						containers := helpers.Capture("ps", "-a")
 						assert.Assert(t, strings.Contains(volumes, data.Identifier()), volumes)
-						assert.Assert(t, !strings.Contains(volumes, data.Get("anonIdentifier")), volumes)
+						assert.Assert(t, !strings.Contains(volumes, data.Labels().Get("anonIdentifier")), volumes)
 						assert.Assert(t, !strings.Contains(containers, data.Identifier()), containers)
 						assert.Assert(t, !strings.Contains(networks, data.Identifier()), networks)
 						assert.Assert(t, !strings.Contains(images, testutil.CommonImage), images)
@@ -76,7 +79,7 @@ func TestSystemPrune(t *testing.T) {
 			// FIXME: using a dedicated namespace does not work with rootful (because of buildkitd)
 			NoParallel: true,
 			// buildkitd is not available with docker
-			Require: test.Require(nerdtest.Build, test.Not(nerdtest.Docker)),
+			Require: require.All(nerdtest.Build, require.Not(nerdtest.Docker)),
 			// FIXME: this test will happily say "green" even if the command actually fails to do its duty
 			// if there is nothing in the build cache.
 			// Ensure with setup here that we DO build something first
@@ -86,7 +89,7 @@ func TestSystemPrune(t *testing.T) {
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return nerdtest.BuildCtlCommand(helpers, "du")
 			},
-			Expected: test.Expects(0, nil, test.Contains("Total:\t\t0B")),
+			Expected: test.Expects(0, nil, expect.Contains("Total:\t\t0B")),
 		},
 	}
 

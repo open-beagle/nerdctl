@@ -17,16 +17,18 @@
 package network
 
 import (
+	"fmt"
 	"net"
 	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
 
-	ipv6helper "github.com/containerd/nerdctl/v2/cmd/nerdctl/helpers"
+	"github.com/containerd/nerdctl/mod/tigron/expect"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 func TestNetworkCreate(t *testing.T) {
@@ -40,7 +42,7 @@ func TestNetworkCreate(t *testing.T) {
 				helpers.Ensure("network", "create", identifier)
 				netw := nerdtest.InspectNetwork(helpers, identifier)
 				assert.Equal(t, len(netw.IPAM.Config), 1)
-				data.Set("subnet", netw.IPAM.Config[0].Subnet)
+				data.Labels().Set("subnet", netw.IPAM.Config[0].Subnet)
 
 				helpers.Ensure("network", "create", data.Identifier("1"))
 			},
@@ -49,7 +51,7 @@ func TestNetworkCreate(t *testing.T) {
 				helpers.Anyhow("network", "rm", data.Identifier("1"))
 			},
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-				data.Set("container2", helpers.Capture("run", "--rm", "--net", data.Identifier("1"), testutil.CommonImage, "ip", "route"))
+				data.Labels().Set("container2", helpers.Capture("run", "--rm", "--net", data.Identifier("1"), testutil.CommonImage, "ip", "route"))
 				return helpers.Command("run", "--rm", "--net", data.Identifier(), testutil.CommonImage, "ip", "route")
 			},
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
@@ -57,8 +59,8 @@ func TestNetworkCreate(t *testing.T) {
 					ExitCode: 0,
 					Errors:   nil,
 					Output: func(stdout string, info string, t *testing.T) {
-						assert.Assert(t, strings.Contains(stdout, data.Get("subnet")), info)
-						assert.Assert(t, !strings.Contains(data.Get("container2"), data.Get("subnet")), info)
+						assert.Assert(t, strings.Contains(stdout, data.Labels().Get("subnet")), info)
+						assert.Assert(t, !strings.Contains(data.Labels().Get("container2"), data.Labels().Get("subnet")), info)
 					},
 				}
 			},
@@ -74,14 +76,14 @@ func TestNetworkCreate(t *testing.T) {
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("run", "--rm", "--net", data.Identifier(), testutil.CommonImage, "ifconfig", "eth0")
 			},
-			Expected: test.Expects(0, nil, test.Contains("MTU:9216")),
+			Expected: test.Expects(0, nil, expect.Contains("MTU:9216")),
 		},
 		{
 			Description: "with ipv6",
 			Require:     nerdtest.OnlyIPv6,
 			Setup: func(data test.Data, helpers test.Helpers) {
 				subnetStr := "2001:db8:8::/64"
-				data.Set("subnetStr", subnetStr)
+				data.Labels().Set("subnetStr", subnetStr)
 				_, _, err := net.ParseCIDR(subnetStr)
 				assert.Assert(t, err == nil)
 
@@ -97,9 +99,9 @@ func TestNetworkCreate(t *testing.T) {
 				return &test.Expected{
 					ExitCode: 0,
 					Output: func(stdout string, info string, t *testing.T) {
-						_, subnet, _ := net.ParseCIDR(data.Get("subnetStr"))
-						ip := ipv6helper.FindIPv6(stdout)
-						assert.Assert(t, subnet.Contains(ip), info)
+						_, subnet, _ := net.ParseCIDR(data.Labels().Get("subnetStr"))
+						ip := nerdtest.FindIPv6(stdout)
+						assert.Assert(t, subnet.Contains(ip), fmt.Sprintf("subnet %s contains ip %s", subnet, ip))
 					},
 				}
 			},

@@ -21,8 +21,10 @@ import (
 	"log"
 	"testing"
 
+	"github.com/containerd/nerdctl/mod/tigron/expect"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 // TestTest is testing the test tooling itself
@@ -48,56 +50,56 @@ func TestTest(t *testing.T) {
 		{
 			Description: "success with contains output testing",
 			Command:     test.Command("info"),
-			Expected:    test.Expects(0, nil, test.Contains("Kernel")),
+			Expected:    test.Expects(0, nil, expect.Contains("Kernel")),
 		},
 		{
 			Description: "success with negative output testing",
 			Command:     test.Command("info"),
-			Expected:    test.Expects(0, nil, test.DoesNotContain("foobar")),
+			Expected:    test.Expects(0, nil, expect.DoesNotContain("foobar")),
 		},
 		// Note that docker annoyingly returns 125 in a few conditions like this
 		{
 			Description: "failure with multiple error testing",
 			Command:     test.Command("-fail"),
-			Expected:    test.Expects(-1, []error{errors.New("unknown"), errors.New("shorthand")}, nil),
+			Expected:    test.Expects(expect.ExitCodeGenericFail, []error{errors.New("unknown"), errors.New("shorthand")}, nil),
 		},
 		{
 			Description: "success with exact output testing",
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Custom("echo", "foobar")
 			},
-			Expected: test.Expects(0, nil, test.Equals("foobar\n")),
+			Expected: test.Expects(0, nil, expect.Equals("foobar\n")),
 		},
 		{
 			Description: "data propagation",
-			Data:        test.WithData("status", "uninitialized"),
+			Data:        test.WithLabels(map[string]string{"status": "uninitialized"}),
 			Setup: func(data test.Data, helpers test.Helpers) {
-				data.Set("status", data.Get("status")+"-setup")
+				data.Labels().Set("status", data.Labels().Get("status")+"-setup")
 			},
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-				cmd := helpers.Custom("printf", data.Get("status"))
-				data.Set("status", data.Get("status")+"-command")
+				cmd := helpers.Custom("printf", data.Labels().Get("status"))
+				data.Labels().Set("status", data.Labels().Get("status")+"-command")
 				return cmd
 			},
 			Cleanup: func(data test.Data, helpers test.Helpers) {
-				if data.Get("status") == "uninitialized" {
+				if data.Labels().Get("status") == "uninitialized" {
 					return
 				}
-				if data.Get("status") != "uninitialized-setup-command" {
-					log.Fatalf("unexpected status label %q", data.Get("status"))
+				if data.Labels().Get("status") != "uninitialized-setup-command" {
+					log.Fatalf("unexpected status label %q", data.Labels().Get("status"))
 				}
-				data.Set("status", data.Get("status")+"-cleanup")
+				data.Labels().Set("status", data.Labels().Get("status")+"-cleanup")
 			},
 			SubTests: []*test.Case{
 				{
 					Description: "Subtest data propagation",
 					Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
-						return helpers.Custom("printf", data.Get("status"))
+						return helpers.Custom("printf", data.Labels().Get("status"))
 					},
-					Expected: test.Expects(0, nil, test.Equals("uninitialized-setup-command")),
+					Expected: test.Expects(0, nil, expect.Equals("uninitialized-setup-command")),
 				},
 			},
-			Expected: test.Expects(0, nil, test.Equals("uninitialized-setup")),
+			Expected: test.Expects(0, nil, expect.Equals("uninitialized-setup")),
 		},
 	}
 

@@ -28,7 +28,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/containernetworking/cni/libcni"
 
@@ -57,7 +56,8 @@ func (e *CNIEnv) ListNetworksMatch(reqs []string, allowPseudoNetwork bool) (list
 	var err error
 
 	var networkConfigs []*NetworkConfig
-	err = lockutil.WithDirLock(e.NetconfPath, func() error {
+	// NOTE: we cannot lock NetconfPath directly, as Cilium (maybe others) are also locking it.
+	err = lockutil.WithDirLock(filepath.Join(e.NetconfPath, ".nerdctl.lock"), func() error {
 		networkConfigs, err = e.networkConfigList()
 		return err
 	})
@@ -221,7 +221,7 @@ func (e *CNIEnv) NetworkList() ([]*NetworkConfig, error) {
 		netConfigList, err = e.networkConfigList()
 		return err
 	}
-	err = lockutil.WithDirLock(e.NetconfPath, fn)
+	err = lockutil.WithDirLock(filepath.Join(e.NetconfPath, ".nerdctl.lock"), fn)
 
 	return netConfigList, err
 }
@@ -337,7 +337,7 @@ func (e *CNIEnv) CreateNetwork(opts types.NetworkCreateOptions) (*NetworkConfig,
 		}
 		return e.writeNetworkConfig(netConf)
 	}
-	err := lockutil.WithDirLock(e.NetconfPath, fn)
+	err := lockutil.WithDirLock(filepath.Join(e.NetconfPath, ".nerdctl.lock"), fn)
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +351,7 @@ func (e *CNIEnv) RemoveNetwork(net *NetworkConfig) error {
 		}
 		return net.clean()
 	}
-	return lockutil.WithDirLock(e.NetconfPath, fn)
+	return lockutil.WithDirLock(filepath.Join(e.NetconfPath, ".nerdctl.lock"), fn)
 }
 
 // GetDefaultNetworkConfig checks whether the default network exists
@@ -408,11 +408,11 @@ func (e *CNIEnv) GetDefaultNetworkConfig() (*NetworkConfig, error) {
 func (e *CNIEnv) ensureDefaultNetworkConfig(bridgeIP string) error {
 	defaultNet, err := e.GetDefaultNetworkConfig()
 	if err != nil {
-		return fmt.Errorf("failed to check for default network: %s", err)
+		return fmt.Errorf("failed to check for default network: %w", err)
 	}
 	if defaultNet == nil {
 		if err := e.createDefaultNetworkConfig(bridgeIP); err != nil {
-			return fmt.Errorf("failed to create default network: %s", err)
+			return fmt.Errorf("failed to create default network: %w", err)
 		}
 	}
 	return nil
@@ -429,7 +429,7 @@ func (e *CNIEnv) createDefaultNetworkConfig(bridgeIP string) error {
 	if bridgeIP != "" {
 		bIP, bCIDR, err := net.ParseCIDR(bridgeIP)
 		if err != nil {
-			return fmt.Errorf("invalid bridge ip %s: %s", bridgeIP, err)
+			return fmt.Errorf("invalid bridge ip %s: %w", bridgeIP, err)
 		}
 		bridgeGatewayIP = bIP.String()
 		bridgeCIDR = bCIDR.String()
@@ -533,21 +533,9 @@ func cniLoad(fileNames []string) (configList []*NetworkConfig, err error) {
 		}
 
 		var netConfigList *libcni.NetworkConfigList
-		if strings.HasSuffix(fileName, ".conflist") {
-			netConfigList, err = libcni.ConfListFromBytes(bytes)
-			if err != nil {
-				return nil, wrapCNIError(fileName, err)
-			}
-		} else {
-			var netConfig *libcni.NetworkConfig
-			netConfig, err = libcni.ConfFromBytes(bytes)
-			if err != nil {
-				return nil, wrapCNIError(fileName, err)
-			}
-			netConfigList, err = libcni.ConfListFromConf(netConfig)
-			if err != nil {
-				return nil, wrapCNIError(fileName, err)
-			}
+		netConfigList, err = libcni.NetworkConfFromBytes(bytes)
+		if err != nil {
+			return nil, wrapCNIError(fileName, err)
 		}
 		id, nerdctlLabels := nerdctlIDLabels(netConfigList.Bytes)
 		configList = append(configList, &NetworkConfig{

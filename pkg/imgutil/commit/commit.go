@@ -48,7 +48,7 @@ import (
 	"github.com/containerd/nerdctl/v2/pkg/clientutil"
 	"github.com/containerd/nerdctl/v2/pkg/cmd/image"
 	"github.com/containerd/nerdctl/v2/pkg/containerutil"
-	imgutil "github.com/containerd/nerdctl/v2/pkg/imgutil"
+	"github.com/containerd/nerdctl/v2/pkg/imgutil"
 	"github.com/containerd/nerdctl/v2/pkg/labels"
 )
 
@@ -128,7 +128,7 @@ func Commit(ctx context.Context, client *containerd.Client, container containerd
 	}
 
 	// Ensure all the layers are here: https://github.com/containerd/nerdctl/issues/3425
-	err = image.EnsureAllContent(ctx, client, baseImg.Name(), globalOptions)
+	err = image.EnsureAllContent(ctx, client, baseImg.Name(), platformMC, globalOptions)
 	if err != nil {
 		log.G(ctx).Warn("Unable to fetch missing layers before committing. " +
 			"If you try to save or push this image, it might fail. See https://github.com/containerd/nerdctl/issues/3439.")
@@ -172,6 +172,9 @@ func Commit(ctx context.Context, client *containerd.Client, container containerd
 		return emptyDigest, fmt.Errorf("failed to create lease for commit: %w", err)
 	}
 	defer done(ctx)
+
+	// Sync filesystem to make sure that all the data writes in container could be persisted to disk.
+	Sync()
 
 	diffLayerDesc, diffID, err := createDiff(ctx, id, sn, client.ContentStore(), differ)
 	if err != nil {

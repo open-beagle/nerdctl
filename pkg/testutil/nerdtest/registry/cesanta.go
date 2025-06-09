@@ -29,12 +29,14 @@ import (
 	"gopkg.in/yaml.v3"
 	"gotest.tools/v3/assert"
 
+	"github.com/containerd/nerdctl/mod/tigron/expect"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/utils/testca"
+
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/dockercompat"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest/ca"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest/platform"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nettestutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/portlock"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 type CesantaConfigServer struct {
@@ -92,7 +94,7 @@ func ensureContainerStarted(helpers test.Helpers, con string) {
 	for i := 0; i < 5 && !started; i++ {
 		helpers.Command("container", "inspect", con).
 			Run(&test.Expected{
-				ExitCode: test.ExitCodeNoCheck,
+				ExitCode: expect.ExitCodeNoCheck,
 				Output: func(stdout string, info string, t *testing.T) {
 					var dc []dockercompat.Container
 					err := json.Unmarshal([]byte(stdout), &dc)
@@ -117,7 +119,7 @@ func ensureContainerStarted(helpers test.Helpers, con string) {
 	}
 }
 
-func NewCesantaAuthServer(data test.Data, helpers test.Helpers, ca *ca.CA, port int, user, pass string, tls bool) *TokenAuthServer {
+func NewCesantaAuthServer(data test.Data, helpers test.Helpers, ca *testca.Cert, port int, user, pass string, tls bool) *TokenAuthServer {
 	// listen on 0.0.0.0 to enable 127.0.0.1
 	listenIP := net.ParseIP("0.0.0.0")
 	hostIP, err := nettestutil.NonLoopbackIPv4()
@@ -126,10 +128,6 @@ func NewCesantaAuthServer(data test.Data, helpers test.Helpers, ca *ca.CA, port 
 	assert.NilError(helpers.T(), err, fmt.Errorf("failed bcrypt encrypting password: %w", err))
 	// Prepare configuration file for authentication server
 	// Details: https://github.com/cesanta/docker_auth/blob/1.7.1/examples/simple.yml
-	configFile, err := os.CreateTemp(data.TempDir(), "authconfig")
-	assert.NilError(helpers.T(), err, fmt.Errorf("failed creating temporary directory for config file: %w", err))
-	configFileName := configFile.Name()
-
 	cc := &CesantaConfig{
 		Server: CesantaConfigServer{
 			Addr: ":5100",
@@ -163,10 +161,11 @@ func NewCesantaAuthServer(data test.Data, helpers test.Helpers, ca *ca.CA, port 
 		cc.Token.Key = "/auth/domain.key"
 	}
 
+	configFileName := data.Temp().Path("authconfig")
 	err = cc.Save(configFileName)
 	assert.NilError(helpers.T(), err, fmt.Errorf("failed writing configuration: %w", err))
 
-	cert := ca.NewCert(hostIP.String())
+	cert := ca.GenerateServerX509(data, helpers, hostIP.String())
 	// FIXME: this will fail in many circumstances. Review strategy on how to acquire a free port.
 	// We probably have better code for that already somewhere.
 	port, err = portlock.Acquire(port)
@@ -178,20 +177,8 @@ func NewCesantaAuthServer(data test.Data, helpers test.Helpers, ca *ca.CA, port 
 	cleanup := func(data test.Data, helpers test.Helpers) {
 		helpers.Ensure("rm", "-f", containerName)
 		errPortRelease := portlock.Release(port)
-		errCertClose := cert.Close()
-		errConfigClose := configFile.Close()
-		errConfigRemove := os.Remove(configFileName)
 		if errPortRelease != nil {
 			helpers.T().Error(errPortRelease.Error())
-		}
-		if errCertClose != nil {
-			helpers.T().Error(errCertClose.Error())
-		}
-		if errConfigClose != nil {
-			helpers.T().Error(errConfigClose.Error())
-		}
-		if errConfigRemove != nil {
-			helpers.T().Error(errConfigRemove.Error())
 		}
 	}
 

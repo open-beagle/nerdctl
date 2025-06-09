@@ -20,9 +20,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 func TestKubeCommitSave(t *testing.T) {
@@ -44,7 +45,7 @@ func TestKubeCommitSave(t *testing.T) {
 				containerID = strings.TrimPrefix(stdout, "containerd://")
 			},
 		})
-		data.Set("containerID", containerID)
+		data.Labels().Set("containerID", containerID)
 	}
 
 	testCase.Cleanup = func(data test.Data, helpers test.Helpers) {
@@ -52,7 +53,7 @@ func TestKubeCommitSave(t *testing.T) {
 	}
 
 	testCase.Command = func(data test.Data, helpers test.Helpers) test.TestableCommand {
-		helpers.Ensure("commit", data.Get("containerID"), "testcommitsave")
+		helpers.Ensure("commit", data.Labels().Get("containerID"), "testcommitsave")
 		return helpers.Command("save", "testcommitsave")
 	}
 

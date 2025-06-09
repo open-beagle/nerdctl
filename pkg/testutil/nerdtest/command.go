@@ -21,14 +21,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/containerd/nerdctl/mod/tigron/test"
 
 	"github.com/containerd/nerdctl/v2/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest/platform"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 )
 
 const defaultNamespace = testutil.Namespace
@@ -77,19 +77,19 @@ func newNerdCommand(conf test.Config, t *testing.T) *nerdCommand {
 	}
 
 	// Create the base command, with the right binary, t
-	ret := &nerdCommand{}
+	ret := &nerdCommand{
+		GenericCommand: *(test.NewGenericCommand().(*test.GenericCommand)),
+	}
+
 	ret.WithBinary(binary)
-	// Not interested in these - and insulate us from parent environment side effects
-	ret.WithBlacklist([]string{
-		"LS_COLORS",
-		"DOCKER_CONFIG",
-		"CONTAINERD_SNAPSHOTTER",
-		"NERDCTL_TOML",
-		"CONTAINERD_ADDRESS",
-		"CNI_PATH",
-		"NETCONFPATH",
-		"NERDCTL_EXPERIMENTAL",
-		"NERDCTL_HOST_GATEWAY_IP",
+	ret.WithWhitelist([]string{
+		"PATH",
+		"HOME",
+		"XDG_*",
+		// Windows needs ProgramData, AppData, etc
+		"Program*",
+		"PROGRAM*",
+		"APPDATA",
 	})
 	return ret
 }
@@ -102,6 +102,7 @@ type nerdCommand struct {
 }
 
 func (nc *nerdCommand) Run(expect *test.Expected) {
+	nc.T().Helper()
 	nc.prep()
 	if getTarget() == targetDocker {
 		// We are not in the business of testing docker *error* output, so, spay expectation here
@@ -112,9 +113,9 @@ func (nc *nerdCommand) Run(expect *test.Expected) {
 	nc.GenericCommand.Run(expect)
 }
 
-func (nc *nerdCommand) Background(timeout time.Duration) {
+func (nc *nerdCommand) Background() {
 	nc.prep()
-	nc.GenericCommand.Background(timeout)
+	nc.GenericCommand.Background()
 }
 
 // Run does override the generic command run, as we are testing both docker and nerdctl
@@ -129,7 +130,7 @@ func (nc *nerdCommand) prep() {
 	if customDCConfig := nc.GenericCommand.Config.Read(DockerConfig); customDCConfig != "" {
 		if !nc.hasWrittenDockerConfig {
 			dest := filepath.Join(nc.Env["DOCKER_CONFIG"], "config.json")
-			err := os.WriteFile(dest, []byte(customDCConfig), 0400)
+			err := os.WriteFile(dest, []byte(customDCConfig), test.FilePermissionsDefault)
 			assert.NilError(nc.T(), err, "failed to write custom docker config json file for test")
 			nc.hasWrittenDockerConfig = true
 		}
@@ -173,7 +174,7 @@ func (nc *nerdCommand) prep() {
 		if nc.Config.Read(NerdctlToml) != "" {
 			if !nc.hasWrittenToml {
 				dest := nc.Env["NERDCTL_TOML"]
-				err := os.WriteFile(dest, []byte(nc.Config.Read(NerdctlToml)), 0400)
+				err := os.WriteFile(dest, []byte(nc.Config.Read(NerdctlToml)), test.FilePermissionsDefault)
 				assert.NilError(nc.T(), err, "failed to write NerdctlToml")
 				nc.hasWrittenToml = true
 			}

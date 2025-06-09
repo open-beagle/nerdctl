@@ -20,9 +20,11 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/containerd/nerdctl/mod/tigron/require"
+	"github.com/containerd/nerdctl/mod/tigron/test"
+
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
-	"github.com/containerd/nerdctl/v2/pkg/testutil/test"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/testregistry"
 )
 
@@ -30,10 +32,10 @@ func TestImageConvert(t *testing.T) {
 	nerdtest.Setup()
 
 	testCase := &test.Case{
-		Require: test.Require(
+		Require: require.All(
 			// FIXME: windows does not support stargz
-			test.Not(test.Windows),
-			test.Not(nerdtest.Docker),
+			require.Not(require.Windows),
+			require.Not(nerdtest.Docker),
 		),
 		Setup: func(data test.Data, helpers test.Helpers) {
 			helpers.Ensure("pull", "--quiet", testutil.CommonImage)
@@ -52,8 +54,8 @@ func TestImageConvert(t *testing.T) {
 			},
 			{
 				Description: "nydus",
-				Require: test.Require(
-					test.Binary("nydus-image"),
+				Require: require.All(
+					require.Binary("nydus-image"),
 				),
 				Cleanup: func(data test.Data, helpers test.Helpers) {
 					helpers.Anyhow("rmi", "-f", data.Identifier("converted-image"))
@@ -101,28 +103,28 @@ func TestImageConvertNydusVerify(t *testing.T) {
 	var registry *testregistry.RegistryServer
 
 	testCase := &test.Case{
-		Require: test.Require(
-			test.Linux,
-			test.Binary("nydus-image"),
-			test.Binary("nydusify"),
-			test.Binary("nydusd"),
-			test.Not(nerdtest.Docker),
+		Require: require.All(
+			require.Linux,
+			require.Binary("nydus-image"),
+			require.Binary("nydusify"),
+			require.Binary("nydusd"),
+			require.Not(nerdtest.Docker),
 			nerdtest.Rootful,
 		),
 		Setup: func(data test.Data, helpers test.Helpers) {
 			helpers.Ensure("pull", "--quiet", testutil.CommonImage)
 			base := testutil.NewBase(t)
 			registry = testregistry.NewWithNoAuth(base, 0, false)
-			data.Set(remoteImageKey, fmt.Sprintf("%s:%d/nydusd-image:test", "localhost", registry.Port))
+			data.Labels().Set(remoteImageKey, fmt.Sprintf("%s:%d/nydusd-image:test", "localhost", registry.Port))
 			helpers.Ensure("image", "convert", "--nydus", "--oci", testutil.CommonImage, data.Identifier("converted-image"))
-			helpers.Ensure("tag", data.Identifier("converted-image"), data.Get(remoteImageKey))
-			helpers.Ensure("push", data.Get(remoteImageKey))
+			helpers.Ensure("tag", data.Identifier("converted-image"), data.Labels().Get(remoteImageKey))
+			helpers.Ensure("push", data.Labels().Get(remoteImageKey))
 		},
 		Cleanup: func(data test.Data, helpers test.Helpers) {
 			helpers.Anyhow("rmi", "-f", data.Identifier("converted-image"))
 			if registry != nil {
 				registry.Cleanup(nil)
-				helpers.Anyhow("rmi", "-f", data.Get(remoteImageKey))
+				helpers.Anyhow("rmi", "-f", data.Labels().Get(remoteImageKey))
 			}
 		},
 		Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
@@ -131,7 +133,7 @@ func TestImageConvertNydusVerify(t *testing.T) {
 				"--source",
 				testutil.CommonImage,
 				"--target",
-				data.Get(remoteImageKey),
+				data.Labels().Get(remoteImageKey),
 				"--source-insecure",
 				"--target-insecure",
 			)
