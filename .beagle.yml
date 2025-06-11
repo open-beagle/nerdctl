@@ -41,7 +41,7 @@ steps:
       BUILD_VERSION: v2.0.3
     commands:
       - rm -rf vendor && go mod vendor
-      - bash .beagle/build.sh
+      - bash .beagle/build.sh  
 
   - name: golang-loong64
     image: registry.cn-qingdao.aliyuncs.com/wod/golang:1.23-loongnix
