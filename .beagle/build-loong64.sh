@@ -3,7 +3,7 @@
 set -x
 
 git config --global --add safe.directory $PWD
-git apply .beagle/v2.0.3-images-prune.patch
+# git apply .beagle/v2.0.3-images-prune.patch
 
 export VERSION="${BUILD_VERSION:-v2.0.0-rc.2}-beagle-$(git rev-parse --short HEAD 2>/dev/null || true)"
 
