@@ -31,7 +31,7 @@ jobs:
           docker run --rm -v ${{ github.workspace }}:/go/src/github.com/containerd/nerdctl \
             -w /go/src/github.com/containerd/nerdctl \
             -e BUILD_VERSION=${{ env.BUILD_VERSION }} \
-            ghcr.io/${{ github.repository }}/golang:1.23 \
+            ghcr.io/${{ github.repository_owner }}/golang:1.23 \
             bash -c "rm -rf vendor && go mod vendor && bash .beagle/build.sh"
 
       - name: Set up Docker Buildx
@@ -45,7 +45,7 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: |
-            ghcr.io/${{ github.repository }}/nerdctl:${{ env.BUILD_VERSION }}-amd64
+            ghcr.io/${{ github.repository_owner }}/nerdctl:${{ env.BUILD_VERSION }}-amd64
           build-args: |
             BASE=alpine:3
             VERSION=${{ env.BUILD_VERSION }}
@@ -62,7 +62,7 @@ jobs:
           push: true
           platforms: linux/arm64
           tags: |
-            ghcr.io/${{ github.repository }}/nerdctl:${{ env.BUILD_VERSION }}-arm64
+            ghcr.io/${{ github.repository_owner }}/nerdctl:${{ env.BUILD_VERSION }}-arm64
           build-args: |
             BASE=alpine:3
             VERSION=${{ env.BUILD_VERSION }}
@@ -73,7 +73,7 @@ jobs:
 
       - name: Create and push multi-arch manifest
         run: |
-          docker manifest create ghcr.io/${{ github.repository }}/nerdctl:${{ env.BUILD_VERSION }} \
-            ghcr.io/${{ github.repository }}/nerdctl:${{ env.BUILD_VERSION }}-amd64 \
-            ghcr.io/${{ github.repository }}/nerdctl:${{ env.BUILD_VERSION }}-arm64
-          docker manifest push ghcr.io/${{ github.repository }}/nerdctl:${{ env.BUILD_VERSION }}
+          docker manifest create ghcr.io/${{ github.repository_owner }}/nerdctl:${{ env.BUILD_VERSION }} \
+            ghcr.io/${{ github.repository_owner }}/nerdctl:${{ env.BUILD_VERSION }}-amd64 \
+            ghcr.io/${{ github.repository_owner }}/nerdctl:${{ env.BUILD_VERSION }}-arm64
+          docker manifest push ghcr.io/${{ github.repository_owner }}/nerdctl:${{ env.BUILD_VERSION }}
