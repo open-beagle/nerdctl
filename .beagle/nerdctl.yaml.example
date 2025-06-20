@@ -1,0 +1,8 @@
+# nerdctl保护镜像配置文件
+# 此文件用于nerdctl system prune命令，确保这些镜像不会被清理
+# 位置：/etc/kubernetes/config/nerdctl.yaml
+# protected_images: 需要保护不被清理的镜像列表
+protected_images:
+- registry.cn-qingdao.aliyuncs.com/wod/cuda:12.6.1-py311-vnc116
+- registry.ali.wodcloud.com/wod/cuda:12.4-py310-torch204
+- registry.ali.wodcloud.com/wod/cuda:12.6-py311

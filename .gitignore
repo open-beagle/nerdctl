@@ -9,3 +9,5 @@ _output
 # vagrant
 /.vagrant
 Vagrantfile
+
+/vendor
