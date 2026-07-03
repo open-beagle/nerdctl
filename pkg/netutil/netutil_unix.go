@@ -90,7 +90,7 @@ func (n *NetworkConfig) clean() error {
 	return nil
 }
 
-func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]interface{}, opts map[string]string, ipv6 bool) ([]CNIPlugin, error) {
+func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]interface{}, opts map[string]string, ipv6 bool, internal bool) ([]CNIPlugin, error) {
 	var (
 		plugins []CNIPlugin
 		err     error
@@ -99,6 +99,7 @@ func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]
 	case "bridge":
 		mtu := 0
 		iPMasq := true
+		icc := true
 		for opt, v := range opts {
 			switch opt {
 			case "mtu", "com.docker.network.driver.mtu":
@@ -108,6 +109,11 @@ func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]
 				}
 			case "ip-masq", "com.docker.network.bridge.enable_ip_masquerade":
 				iPMasq, err = strconv.ParseBool(v)
+				if err != nil {
+					return nil, err
+				}
+			case "icc", "com.docker.network.bridge.enable_icc":
+				icc, err = strconv.ParseBool(v)
 				if err != nil {
 					return nil, err
 				}
@@ -123,16 +129,39 @@ func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]
 		}
 		bridge.MTU = mtu
 		bridge.IPAM = ipam
-		bridge.IsGW = true
-		bridge.IPMasq = iPMasq
+		bridge.IsGW = !internal
+		if internal {
+			bridge.IPMasq = false
+		} else {
+			bridge.IPMasq = iPMasq
+		}
 		bridge.HairpinMode = true
 		if ipv6 {
 			bridge.Capabilities["ips"] = true
 		}
-		plugins = []CNIPlugin{bridge, newPortMapPlugin(), newFirewallPlugin(), newTuningPlugin()}
+
+		// Determine the appropriate firewall ingress policy based on icc setting
+		ingressPolicy := "same-bridge" // Default policy
+		firewallPath := filepath.Join(e.Path, "firewall")
+		if !icc {
+			// Check if firewall plugin supports the "isolated" policy (v1.7.1+)
+			ok, err := FirewallPluginGEQVersion(firewallPath, "v1.7.1")
+			if err != nil {
+				log.L.WithError(err).Warnf("Failed to detect whether %q is newer than v1.7.1", firewallPath)
+			} else if ok {
+				ingressPolicy = "isolated"
+			} else {
+				log.L.Warnf("To use 'isolated' ingress policy, CNI plugin \"firewall\" (>= 1.7.1) needs to be installed in CNI_PATH (%q), see https://www.cni.dev/plugins/current/meta/firewall/", e.Path)
+			}
+		}
+
+		if internal {
+			plugins = []CNIPlugin{bridge, newFirewallPlugin(ingressPolicy), newTuningPlugin()}
+		} else {
+			plugins = []CNIPlugin{bridge, newPortMapPlugin(), newFirewallPlugin(ingressPolicy), newTuningPlugin()}
+		}
 		if name != DefaultNetworkName {
-			firewallPath := filepath.Join(e.Path, "firewall")
-			ok, err := firewallPluginGEQ110(firewallPath)
+			ok, err := FirewallPluginGEQVersion(firewallPath, "v1.1.0")
 			if err != nil {
 				log.L.WithError(err).Warnf("Failed to detect whether %q is newer than v1.1.0", firewallPath)
 			}
@@ -186,13 +215,15 @@ func (e *CNIEnv) generateCNIPlugins(driver string, name string, ipam map[string]
 	return plugins, nil
 }
 
-func (e *CNIEnv) generateIPAM(driver string, subnets []string, gatewayStr, ipRangeStr string, opts map[string]string, ipv6 bool) (map[string]interface{}, error) {
+func (e *CNIEnv) generateIPAM(driver string, subnets []string, gatewayStr, ipRangeStr string, opts map[string]string, ipv6 bool, internal bool) (map[string]interface{}, error) {
 	var ipamConfig interface{}
 	switch driver {
 	case "default", "host-local":
 		ipamConf := newHostLocalIPAMConfig()
-		ipamConf.Routes = []IPAMRoute{
-			{Dst: "0.0.0.0/0"},
+		if !internal {
+			ipamConf.Routes = []IPAMRoute{
+				{Dst: "0.0.0.0/0"},
+			}
 		}
 		ranges, findIPv4, err := e.parseIPAMRanges(subnets, gatewayStr, ipRangeStr, ipv6)
 		if err != nil {
@@ -281,7 +312,8 @@ func (e *CNIEnv) parseIPAMRanges(subnets []string, gateway, ipRange string, ipv6
 	return ranges, findIPv4, nil
 }
 
-func firewallPluginGEQ110(firewallPath string) (bool, error) {
+// FirewallPluginGEQVersion checks if the firewall plugin is greater than or equal to the specified version
+func FirewallPluginGEQVersion(firewallPath string, versionStr string) (bool, error) {
 	// TODO: guess true by default in 2023
 	guessed := false
 
@@ -310,8 +342,8 @@ func firewallPluginGEQ110(firewallPath string) (bool, error) {
 	if err != nil {
 		return guessed, fmt.Errorf("failed to guess the version of %q: %w", firewallPath, err)
 	}
-	ver110 := semver.MustParse("v1.1.0")
-	return ver.GreaterThan(ver110) || ver.Equal(ver110), nil
+	targetVer := semver.MustParse(versionStr)
+	return ver.GreaterThan(targetVer) || ver.Equal(targetVer), nil
 }
 
 // guessFirewallPluginVersion guess the version of the CNI firewall plugin (not the version of the implemented CNI spec).

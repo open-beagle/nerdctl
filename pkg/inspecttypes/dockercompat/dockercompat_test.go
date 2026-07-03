@@ -22,15 +22,23 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/docker/go-connections/nat"
+	"github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"gotest.tools/v3/assert"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
+	"github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/go-cni"
 
+	"github.com/containerd/nerdctl/v2/pkg/healthcheck"
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/native"
+	"github.com/containerd/nerdctl/v2/pkg/internal/filesystem"
+	"github.com/containerd/nerdctl/v2/pkg/labels"
 )
 
 func TestContainerFromNative(t *testing.T) {
@@ -38,8 +46,18 @@ func TestContainerFromNative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(tempStateDir, "resolv.conf"), []byte(""), 0644)
+	filesystem.WriteFile(filepath.Join(tempStateDir, "resolv.conf"), []byte(""), 0644)
 	defer os.RemoveAll(tempStateDir)
+
+	hc := &healthcheck.Healthcheck{
+		Test:        []string{"CMD-SHELL", "curl -f http://localhost || exit 1"},
+		Interval:    time.Second * 30,
+		Timeout:     time.Second * 5,
+		Retries:     3,
+		StartPeriod: time.Second * 10,
+	}
+	hcJSON, err := hc.ToJSONString()
+	assert.NilError(t, err)
 
 	testcase := []struct {
 		name     string
@@ -87,9 +105,9 @@ func TestContainerFromNative(t *testing.T) {
 						Driver: "json-file",
 						Opts:   map[string]string{},
 					},
-					UTSMode:            "host",
-					Tmpfs:              map[string]string{},
-					LinuxBlkioSettings: getDefaultLinuxBlkioSettings(),
+					UTSMode:       "host",
+					Tmpfs:         map[string]string{},
+					BlkioSettings: getDefaultBlkioSettings(),
 				},
 				Mounts: []MountPoint{
 					{
@@ -183,9 +201,9 @@ func TestContainerFromNative(t *testing.T) {
 						Driver: "json-file",
 						Opts:   map[string]string{},
 					},
-					UTSMode:            "host",
-					Tmpfs:              map[string]string{},
-					LinuxBlkioSettings: getDefaultLinuxBlkioSettings(),
+					UTSMode:       "host",
+					Tmpfs:         map[string]string{},
+					BlkioSettings: getDefaultBlkioSettings(),
 				},
 				Mounts: []MountPoint{
 					{
@@ -274,9 +292,9 @@ func TestContainerFromNative(t *testing.T) {
 						Driver: "json-file",
 						Opts:   map[string]string{},
 					},
-					UTSMode:            "host",
-					Tmpfs:              map[string]string{},
-					LinuxBlkioSettings: getDefaultLinuxBlkioSettings(),
+					UTSMode:       "host",
+					Tmpfs:         map[string]string{},
+					BlkioSettings: getDefaultBlkioSettings(),
 				},
 				Mounts: []MountPoint{
 					{
@@ -298,6 +316,51 @@ func TestContainerFromNative(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "container with healthcheck label",
+			n: &native.Container{
+				Container: containers.Container{
+					Labels: map[string]string{
+						labels.HealthCheck: hcJSON,
+					},
+				},
+				Spec: &specs.Spec{},
+				Process: &native.Process{
+					Status: containerd.Status{
+						Status: "running",
+					},
+				},
+			},
+			expected: &Container{
+				Created:  "0001-01-01T00:00:00Z",
+				Platform: runtime.GOOS,
+				Mounts:   []MountPoint{},
+				State: &ContainerState{
+					Status:     "running",
+					Running:    true,
+					Pid:        0,
+					FinishedAt: "",
+				},
+				HostConfig: &HostConfig{
+					LogConfig:     loggerLogConfig{Driver: "json-file", Opts: map[string]string{}},
+					PortBindings:  nat.PortMap{},
+					GroupAdd:      []string{},
+					Tmpfs:         map[string]string{},
+					UTSMode:       "host",
+					BlkioSettings: getDefaultBlkioSettings(),
+				},
+				NetworkSettings: &NetworkSettings{
+					Ports:    &nat.PortMap{},
+					Networks: map[string]*NetworkEndpointSettings{},
+				},
+				Config: &Config{
+					Labels: map[string]string{
+						labels.HealthCheck: hcJSON,
+					},
+					Healthcheck: hc,
+				},
+			},
+		},
 	}
 
 	for _, tc := range testcase {
@@ -313,7 +376,7 @@ func TestNetworkSettingsFromNative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(tempStateDir, "resolv.conf"), []byte(""), 0644)
+	filesystem.WriteFile(filepath.Join(tempStateDir, "resolv.conf"), []byte(""), 0644)
 	defer os.RemoveAll(tempStateDir)
 
 	testcase := []struct {
@@ -351,11 +414,17 @@ func TestNetworkSettingsFromNative(t *testing.T) {
 						Addrs:        []string{"10.0.4.30/24"},
 					},
 				},
+				PortMappings: []cni.PortMapping{
+					{
+						HostPort:      8075,
+						ContainerPort: 77,
+						Protocol:      "tcp",
+						HostIP:        "127.0.0.1",
+					},
+				},
 			},
 			s: &specs.Spec{
-				Annotations: map[string]string{
-					"nerdctl/ports": "[{\"HostPort\":8075,\"ContainerPort\":77,\"Protocol\":\"tcp\",\"HostIP\":\"127.0.0.1\"}]",
-				},
+				Annotations: map[string]string{},
 			},
 			expected: &NetworkSettings{
 				Ports: &nat.PortMap{
@@ -510,4 +579,96 @@ func TestCpuSettingsFromNative(t *testing.T) {
 			assert.DeepEqual(t, result, tc.expected)
 		})
 	}
+}
+
+func TestImageFromNative(t *testing.T) {
+	t.Run("parses RepoTags/Digests and RootFS Layers", func(t *testing.T) {
+		createdTime := time.Now().UTC()
+
+		img := native.Image{
+			Image: images.Image{
+				Name: "myrepo/myimage:custom",
+				Target: ocispec.Descriptor{
+					Digest: digest.Digest("sha256:targetdigest"),
+				},
+			},
+			ImageConfigDesc: ocispec.Descriptor{
+				Digest: digest.Digest("sha256:configdigest"),
+			},
+			ImageConfig: ocispec.Image{
+				RootFS: ocispec.RootFS{
+					Type:    "layers",
+					DiffIDs: []digest.Digest{"sha256:layer1", "sha256:layer2"},
+				},
+				History: []ocispec.History{
+					{
+						Created: &createdTime,
+						Author:  "test-author",
+						Comment: "test-comment",
+					},
+				},
+			},
+		}
+
+		out, err := ImageFromNative(&img)
+		assert.NilError(t, err)
+
+		// ID, tags, digests
+		assert.Equal(t, out.ID, "sha256:configdigest")
+		assert.Equal(t, out.RepoTags[0], "myrepo/myimage:custom")
+		assert.Equal(t, out.RepoDigests[0], "myrepo/myimage@sha256:targetdigest")
+
+		// RootFS
+		assert.DeepEqual(t, out.RootFS.Layers, []string{"sha256:layer1", "sha256:layer2"})
+
+		// History
+		assert.Equal(t, out.Author, "test-author")
+		assert.Equal(t, out.Comment, "test-comment")
+		assert.Equal(t, out.Created, createdTime.Format(time.RFC3339Nano))
+	})
+
+	t.Run("parses Healthcheck label", func(t *testing.T) {
+		testcases := []struct {
+			name     string
+			labels   map[string]string
+			expected *healthcheck.Healthcheck
+		}{
+			{
+				name: "Valid Healthcheck Label",
+				labels: map[string]string{
+					labels.HealthCheck: `{
+						"test": ["CMD-SHELL", "curl -f http://localhost/ || exit 1"],
+						"interval": 30000000000,
+						"timeout": 5000000000
+					}`,
+				},
+				expected: &healthcheck.Healthcheck{
+					Test:     []string{"CMD-SHELL", "curl -f http://localhost/ || exit 1"},
+					Interval: time.Second * 30,
+					Timeout:  time.Second * 5,
+				},
+			},
+			{
+				name:     "No Healthcheck Label",
+				labels:   map[string]string{},
+				expected: nil,
+			},
+		}
+
+		for _, tc := range testcases {
+			t.Run(tc.name, func(t *testing.T) {
+				img := native.Image{
+					ImageConfig: ocispec.Image{
+						Config: ocispec.ImageConfig{
+							Labels: tc.labels,
+						},
+					},
+				}
+
+				out, err := ImageFromNative(&img)
+				assert.NilError(t, err)
+				assert.DeepEqual(t, out.Config.Healthcheck, tc.expected)
+			})
+		}
+	})
 }

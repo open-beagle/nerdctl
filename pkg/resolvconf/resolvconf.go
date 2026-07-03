@@ -36,6 +36,8 @@ import (
 	"sync"
 
 	"github.com/containerd/log"
+
+	"github.com/containerd/nerdctl/v2/pkg/internal/filesystem"
 )
 
 const (
@@ -70,7 +72,7 @@ var (
 // More information at https://www.freedesktop.org/software/systemd/man/systemd-resolved.service.html#/etc/resolv.conf
 func Path() string {
 	detectSystemdResolvConfOnce.Do(func() {
-		candidateResolvConf, err := os.ReadFile(defaultPath)
+		candidateResolvConf, err := filesystem.ReadFile(defaultPath)
 		if err != nil {
 			// silencing error as it will resurface at next calls trying to read defaultPath
 			return
@@ -131,7 +133,7 @@ func Get() (*File, error) {
 
 // GetSpecific returns the contents of the user specified resolv.conf file and its hash
 func GetSpecific(path string) (*File, error) {
-	resolv, err := os.ReadFile(path)
+	resolv, err := filesystem.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +151,7 @@ func GetIfChanged() (*File, error) {
 	lastModified.Lock()
 	defer lastModified.Unlock()
 
-	resolv, err := os.ReadFile(Path())
+	resolv, err := filesystem.ReadFile(Path())
 	if err != nil {
 		return nil, err
 	}
@@ -317,12 +319,12 @@ func Build(path string, dns, dnsSearch, dnsOptions []string) (*File, error) {
 		return nil, err
 	}
 
-	err = os.WriteFile(path, content.Bytes(), 0o644)
+	err = filesystem.WriteFile(path, content.Bytes(), 0o644)
 	if err != nil {
 		return nil, err
 	}
 
-	// os.WriteFile relies on syscall.Open. Unless there are ACLs, the effective mode of the file will be matched
+	// WriteFile relies on syscall.Open. Unless there are ACLs, the effective mode of the file will be matched
 	// against the current process umask.
 	// See https://www.man7.org/linux/man-pages/man2/open.2.html for details.
 	// Since we must make sure that these files are world readable, explicitly chmod them here.

@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -36,7 +37,6 @@ import (
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
-	"github.com/containerd/go-cni"
 	"github.com/containerd/log"
 
 	"github.com/containerd/nerdctl/v2/pkg/annotations"
@@ -47,17 +47,21 @@ import (
 	"github.com/containerd/nerdctl/v2/pkg/containerutil"
 	"github.com/containerd/nerdctl/v2/pkg/dnsutil/hostsstore"
 	"github.com/containerd/nerdctl/v2/pkg/flagutil"
+	"github.com/containerd/nerdctl/v2/pkg/healthcheck"
 	"github.com/containerd/nerdctl/v2/pkg/idgen"
 	"github.com/containerd/nerdctl/v2/pkg/imgutil"
 	"github.com/containerd/nerdctl/v2/pkg/imgutil/load"
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/dockercompat"
+	"github.com/containerd/nerdctl/v2/pkg/internal/filesystem"
 	"github.com/containerd/nerdctl/v2/pkg/ipcutil"
 	"github.com/containerd/nerdctl/v2/pkg/labels"
 	"github.com/containerd/nerdctl/v2/pkg/logging"
 	"github.com/containerd/nerdctl/v2/pkg/maputil"
 	"github.com/containerd/nerdctl/v2/pkg/mountutil"
 	"github.com/containerd/nerdctl/v2/pkg/namestore"
+	"github.com/containerd/nerdctl/v2/pkg/netutil/networkstore"
 	"github.com/containerd/nerdctl/v2/pkg/platformutil"
+	"github.com/containerd/nerdctl/v2/pkg/portutil"
 	"github.com/containerd/nerdctl/v2/pkg/referenceutil"
 	"github.com/containerd/nerdctl/v2/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/v2/pkg/store"
@@ -332,6 +336,15 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 	}
 	cOpts = append(cOpts, rtCOpts...)
 
+	// Generate health check config based on CLI flags and image.
+	healthcheckConfig, err := withHealthcheck(options, ensuredImage)
+	if err != nil {
+		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), err
+	}
+	if healthcheckConfig != "" {
+		internalLabels.healthcheck = healthcheckConfig
+	}
+
 	lCOpts, err := withContainerLabels(options.Label, options.LabelFile, ensuredImage)
 	if err != nil {
 		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), err
@@ -339,8 +352,7 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 	cOpts = append(cOpts, lCOpts...)
 
 	var containerNameStore namestore.NameStore
-	if options.Name == "" && !options.NameChanged {
-		// Automatically set the container name, unless `--name=""` was explicitly specified.
+	if options.Name == "" {
 		var imageRef string
 		if ensuredImage != nil {
 			imageRef = ensuredImage.Ref
@@ -352,15 +364,15 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 		}
 		options.Name = parsedReference.SuggestContainerName(id)
 	}
-	if options.Name != "" {
-		containerNameStore, err = namestore.New(dataStore, options.GOptions.Namespace)
-		if err != nil {
-			return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), err
-		}
-		if err := containerNameStore.Acquire(options.Name, id); err != nil {
-			return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), err
-		}
+
+	containerNameStore, err = namestore.New(dataStore, options.GOptions.Namespace)
+	if err != nil {
+		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), err
 	}
+	if err := containerNameStore.Acquire(options.Name, id); err != nil {
+		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), err
+	}
+
 	internalLabels.name = options.Name
 	internalLabels.pidFile = options.PidFile
 
@@ -378,6 +390,14 @@ func Create(ctx context.Context, client *containerd.Client, args []string, netMa
 		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), err
 	}
 	cOpts = append(cOpts, ilOpt)
+
+	netConf := networkstore.NetworkConfig{
+		PortMappings: netLabelOpts.PortMappings,
+	}
+	err = portutil.StoreNetworkConfig(dataStore, options.GOptions.Namespace, id, netConf)
+	if err != nil {
+		return nil, generateRemoveOrphanedDirsFunc(ctx, id, dataStore, internalLabels), fmt.Errorf("Error writing to network-config.json: %v", err)
+	}
 
 	opts = append(opts, propagateInternalContainerdLabelsToOCIAnnotations(),
 		oci.WithAnnotations(strutil.ConvertKVStringsToMap(options.Annotations)))
@@ -678,7 +698,6 @@ type internalLabels struct {
 	networks             []string
 	ipAddress            string
 	ip6Address           string
-	ports                []cni.PortMapping
 	macAddress           string
 	dnsServers           []string
 	dnsSearchDomains     []string
@@ -706,6 +725,8 @@ type internalLabels struct {
 	deviceMapping []dockercompat.DeviceMapping
 
 	user string
+
+	healthcheck string
 }
 
 // WithInternalLabels sets the internal labels for a container.
@@ -714,9 +735,7 @@ func withInternalLabels(internalLabels internalLabels) (containerd.NewContainerO
 	var hostConfigLabel dockercompat.HostConfigLabel
 	var dnsSettings dockercompat.DNSSettings
 	m[labels.Namespace] = internalLabels.namespace
-	if internalLabels.name != "" {
-		m[labels.Name] = internalLabels.name
-	}
+	m[labels.Name] = internalLabels.name
 	m[labels.Hostname] = internalLabels.hostname
 	m[labels.Domainname] = internalLabels.domainname
 	extraHostsJSON, err := json.Marshal(internalLabels.extraHosts)
@@ -730,13 +749,6 @@ func withInternalLabels(internalLabels internalLabels) (containerd.NewContainerO
 		return nil, err
 	}
 	m[labels.Networks] = string(networksJSON)
-	if len(internalLabels.ports) > 0 {
-		portsJSON, err := json.Marshal(internalLabels.ports)
-		if err != nil {
-			return nil, err
-		}
-		m[labels.Ports] = string(portsJSON)
-	}
 	if internalLabels.logURI != "" {
 		m[labels.LogURI] = internalLabels.logURI
 		logConfigJSON, err := json.Marshal(internalLabels.logConfig)
@@ -831,14 +843,70 @@ func withInternalLabels(internalLabels internalLabels) (containerd.NewContainerO
 		m[labels.User] = internalLabels.user
 	}
 
+	if len(internalLabels.healthcheck) > 0 {
+		m[labels.HealthCheck] = internalLabels.healthcheck
+	}
+
 	return containerd.WithAdditionalContainerLabels(m), nil
+}
+
+func withHealthcheck(options types.ContainerCreateOptions, ensuredImage *imgutil.EnsuredImage) (string, error) {
+	// If explicitly disabled
+	if options.NoHealthcheck {
+		hc := &healthcheck.Healthcheck{
+			Test: []string{"NONE"},
+		}
+		hcJSON, err := hc.ToJSONString()
+		if err != nil {
+			return "", fmt.Errorf("failed to serialize disabled healthcheck config: %w", err)
+		}
+		return hcJSON, nil
+	}
+
+	// Start with health checks in image if present
+	hc := &healthcheck.Healthcheck{}
+	if ensuredImage != nil && ensuredImage.ImageConfig.Labels != nil {
+		if label := ensuredImage.ImageConfig.Labels[labels.HealthCheck]; label != "" {
+			parsed, err := healthcheck.HealthCheckFromJSON(label)
+			if err != nil {
+				return "", fmt.Errorf("failed to parse healthcheck label in image: %w", err)
+			}
+			hc = parsed
+		}
+	}
+
+	// Apply CLI overrides
+	if options.HealthCmd != "" {
+		hc.Test = []string{"CMD-SHELL", options.HealthCmd}
+	}
+	if options.HealthInterval != 0 {
+		hc.Interval = options.HealthInterval
+	}
+	if options.HealthTimeout != 0 {
+		hc.Timeout = options.HealthTimeout
+	}
+	if options.HealthRetries != 0 {
+		hc.Retries = options.HealthRetries
+	}
+	if options.HealthStartPeriod != 0 {
+		hc.StartPeriod = options.HealthStartPeriod
+	}
+
+	// If no healthcheck config is set (via CLI or image), return empty string so we skip adding to container config.
+	if reflect.DeepEqual(hc, &healthcheck.Healthcheck{}) {
+		return "", nil
+	}
+	hcJSON, err := hc.ToJSONString()
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize healthcheck config: %w", err)
+	}
+	return hcJSON, nil
 }
 
 // loadNetOpts loads network options into InternalLabels.
 func (il *internalLabels) loadNetOpts(opts types.NetworkOptions) {
 	il.hostname = opts.Hostname
 	il.domainname = opts.Domainname
-	il.ports = opts.PortMappings
 	il.ipAddress = opts.IPAddress
 	il.ip6Address = opts.IP6Address
 	il.networks = opts.NetworkSlice
@@ -954,7 +1022,7 @@ func generateLogConfig(dataStore string, id string, logDriver string, logOpt []s
 		}
 
 		logConfigFilePath := logging.LogConfigFilePath(dataStore, ns, id)
-		if err = os.WriteFile(logConfigFilePath, logConfigB, 0600); err != nil {
+		if err = filesystem.WriteFile(logConfigFilePath, logConfigB, 0600); err != nil {
 			return logConfig, err
 		}
 
@@ -1024,15 +1092,13 @@ func generateGcFunc(ctx context.Context, container containerd.Container, ns, id,
 			log.G(ctx).WithError(rmErr).Warnf("failed to remove container %q state dir %q", id, internalLabels.stateDir)
 		}
 
-		if name != "" {
-			var errE error
-			if containerNameStore, errE = namestore.New(dataStore, ns); errE != nil {
-				log.G(ctx).WithError(errE).Warnf("failed to instantiate container name store during cleanup for container %q", id)
-			}
-			// Double-releasing may happen with containers started with --rm, so, ignore NotFound errors
-			if errE := containerNameStore.Release(name, id); errE != nil && !errors.Is(errE, store.ErrNotFound) {
-				log.G(ctx).WithError(errE).Warnf("failed to release container name store for container %q (%s)", name, id)
-			}
+		var errE error
+		if containerNameStore, errE = namestore.New(dataStore, ns); errE != nil {
+			log.G(ctx).WithError(errE).Warnf("failed to instantiate container name store during cleanup for container %q", id)
+		}
+		// Double-releasing may happen with containers started with --rm, so, ignore NotFound errors
+		if errE := containerNameStore.Release(name, id); errE != nil && !errors.Is(errE, store.ErrNotFound) {
+			log.G(ctx).WithError(errE).Warnf("failed to release container name store for container %q (%s)", name, id)
 		}
 	}
 }

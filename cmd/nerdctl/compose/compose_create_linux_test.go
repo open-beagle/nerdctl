@@ -25,6 +25,7 @@ import (
 
 	"github.com/containerd/nerdctl/mod/tigron/expect"
 	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/tig"
 
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
@@ -35,7 +36,7 @@ func TestComposeCreate(t *testing.T) {
 services:
   svc0:
     image: %s
-`, testutil.AlpineImage)
+`, testutil.CommonImage)
 
 	testCase := nerdtest.Setup()
 
@@ -64,7 +65,7 @@ services:
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("compose", "-f", data.Labels().Get("composeYaml"), "ps", "svc0", "-a")
 			},
-			Expected: test.Expects(expect.ExitCodeSuccess, nil, func(stdout, info string, t *testing.T) {
+			Expected: test.Expects(expect.ExitCodeSuccess, nil, func(stdout string, t tig.T) {
 				assert.Assert(t,
 					strings.Contains(stdout, "created") || strings.Contains(stdout, "Created"),
 					"stdout should contain `created`")
@@ -121,7 +122,7 @@ services:
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("compose", "-f", data.Labels().Get("composeYaml"), "ps", "svc0", "-a")
 			},
-			Expected: test.Expects(expect.ExitCodeSuccess, nil, func(stdout, info string, t *testing.T) {
+			Expected: test.Expects(expect.ExitCodeSuccess, nil, func(stdout string, t tig.T) {
 				assert.Assert(t,
 					strings.Contains(stdout, "created") || strings.Contains(stdout, "Created"),
 					"stdout should contain `created`")
@@ -133,7 +134,7 @@ services:
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("compose", "-f", data.Labels().Get("composeYaml"), "ps", "svc1", "-a")
 			},
-			Expected: test.Expects(expect.ExitCodeSuccess, nil, func(stdout, info string, t *testing.T) {
+			Expected: test.Expects(expect.ExitCodeSuccess, nil, func(stdout string, t tig.T) {
 				assert.Assert(t,
 					strings.Contains(stdout, "created") || strings.Contains(stdout, "Created"),
 					"stdout should contain `created`")
@@ -151,7 +152,7 @@ func TestComposeCreatePull(t *testing.T) {
 services:
   svc0:
     image: %s
-`, testutil.AlpineImage)
+`, testutil.CommonImage)
 
 	comp := testutil.NewComposeDir(t, dockerComposeYAML)
 	defer comp.CleanUp()
@@ -161,12 +162,12 @@ services:
 	defer base.ComposeCmd("-f", comp.YAMLFullPath(), "down", "-v").AssertOK()
 
 	// `compose create --pull never` should fail: no such image
-	base.Cmd("rmi", "-f", testutil.AlpineImage).Run()
+	base.Cmd("rmi", "-f", testutil.CommonImage).Run()
 	base.ComposeCmd("-f", comp.YAMLFullPath(), "create", "--pull", "never").AssertFail()
 	// `compose create --pull missing(default)|always` should succeed: image is pulled and container is created
-	base.Cmd("rmi", "-f", testutil.AlpineImage).Run()
+	base.Cmd("rmi", "-f", testutil.CommonImage).Run()
 	base.ComposeCmd("-f", comp.YAMLFullPath(), "create").AssertOK()
-	base.Cmd("rmi", "-f", testutil.AlpineImage).Run()
+	base.Cmd("rmi", "-f", testutil.CommonImage).Run()
 	base.ComposeCmd("-f", comp.YAMLFullPath(), "create", "--pull", "always").AssertOK()
 	base.ComposeCmd("-f", comp.YAMLFullPath(), "ps", "svc0", "-a").AssertOutContainsAny("Created", "created")
 }
@@ -181,7 +182,7 @@ services:
     image: %s
 `, imageSvc0)
 
-	dockerfile := fmt.Sprintf(`FROM %s`, testutil.AlpineImage)
+	dockerfile := fmt.Sprintf(`FROM %s`, testutil.CommonImage)
 
 	testutil.RequiresBuild(t)
 	testutil.RegisterBuildCacheCleanup(t)

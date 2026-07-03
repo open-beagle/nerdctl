@@ -41,6 +41,7 @@ import (
 	"github.com/containerd/nerdctl/v2/pkg/buildkitutil"
 	"github.com/containerd/nerdctl/v2/pkg/clientutil"
 	"github.com/containerd/nerdctl/v2/pkg/containerutil"
+	"github.com/containerd/nerdctl/v2/pkg/internal/filesystem"
 	"github.com/containerd/nerdctl/v2/pkg/platformutil"
 	"github.com/containerd/nerdctl/v2/pkg/referenceutil"
 	"github.com/containerd/nerdctl/v2/pkg/strutil"
@@ -110,7 +111,7 @@ func Build(ctx context.Context, client *containerd.Client, options types.Builder
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(options.IidFile, []byte(id), 0644); err != nil {
+		if err := filesystem.WriteFile(options.IidFile, []byte(id), 0644); err != nil {
 			return err
 		}
 	}
@@ -403,6 +404,15 @@ func generateBuildctlArgs(ctx context.Context, client *containerd.Client, option
 	for _, s := range strutil.DedupeStrSlice(options.Attest) {
 		optAttestType, optAttestAttrs, _ := strings.Cut(s, ",")
 		if strings.HasPrefix(optAttestType, "type=") {
+			if strings.HasPrefix(optAttestAttrs, "disabled=") {
+				disabled, err := strconv.ParseBool(strings.TrimPrefix(optAttestAttrs, "disabled="))
+				if err != nil {
+					return "", nil, false, "", nil, nil, fmt.Errorf("invalid value for attribute \"disabled\"")
+				}
+				if disabled {
+					continue
+				}
+			}
 			optAttestType := strings.TrimPrefix(optAttestType, "type=")
 			buildctlArgs = append(buildctlArgs, fmt.Sprintf("--opt=attest:%s=%s", optAttestType, optAttestAttrs))
 		} else {
@@ -466,7 +476,7 @@ func generateBuildctlArgs(ctx context.Context, client *containerd.Client, option
 }
 
 func getDigestFromMetaFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	data, err := filesystem.ReadFile(path)
 	if err != nil {
 		return "", err
 	}

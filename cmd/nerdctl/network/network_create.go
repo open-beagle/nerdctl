@@ -42,6 +42,7 @@ func createCommand() *cobra.Command {
 	cmd.Flags().StringP("driver", "d", DefaultNetworkDriver, "Driver to manage the Network")
 	cmd.RegisterFlagCompletionFunc("driver", completion.NetworkDrivers)
 	cmd.Flags().StringArrayP("opt", "o", nil, "Set driver specific options")
+	cmd.RegisterFlagCompletionFunc("opt", completion.NetworkOptions)
 	cmd.Flags().String("ipam-driver", "default", "IP Address helpers.Management Driver")
 	cmd.RegisterFlagCompletionFunc("ipam-driver", completion.IPAMDrivers)
 	cmd.Flags().StringArray("ipam-opt", nil, "Set IPAM driver specific options")
@@ -50,6 +51,7 @@ func createCommand() *cobra.Command {
 	cmd.Flags().String("ip-range", "", `Allocate container ip from a sub-range`)
 	cmd.Flags().StringArray("label", nil, "Set metadata for a network")
 	cmd.Flags().Bool("ipv6", false, "Enable IPv6 networking")
+	cmd.Flags().Bool("internal", false, "Restrict external access to the network")
 	return cmd
 }
 
@@ -99,6 +101,10 @@ func createAction(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	internal, err := cmd.Flags().GetBool("internal")
+	if err != nil {
+		return err
+	}
 
 	return network.Create(types.NetworkCreateOptions{
 		GOptions:    globalOptions,
@@ -112,5 +118,6 @@ func createAction(cmd *cobra.Command, args []string) error {
 		IPRange:     ipRangeStr,
 		Labels:      labels,
 		IPv6:        ipv6,
+		Internal:    internal,
 	}, cmd.OutOrStdout())
 }

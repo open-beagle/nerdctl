@@ -57,6 +57,7 @@ const (
 	// Currently, the length of the slice must be 1.
 	Networks = Prefix + "networks"
 
+	// DEPRECATED : https://github.com/containerd/nerdctl/pull/4290
 	// Ports is a JSON-marshalled string of []cni.PortMapping .
 	Ports = Prefix + "ports"
 
@@ -118,4 +119,10 @@ const (
 
 	// User is the username of the container
 	User = Prefix + "user"
+
+	// HealthCheck stores the health check configuration used to run health checks on the container
+	HealthCheck = Prefix + "healthcheck"
+
+	// HealthState stores the current health state (status and failing streak).
+	HealthState = Prefix + "healthstate"
 )

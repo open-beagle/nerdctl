@@ -26,6 +26,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gotest.tools/v3/assert"
 
+	"github.com/containerd/nerdctl/v2/pkg/internal/filesystem"
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest/platform"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nettestutil"
@@ -56,13 +57,6 @@ type TokenAuthServer struct {
 
 func EnsureImages(base *testutil.Base) {
 	registryImage := platform.RegistryImageStable
-	up := os.Getenv("DISTRIBUTION_VERSION")
-	if up != "" {
-		if up[0:1] != "v" {
-			up = "v" + up
-		}
-		registryImage = platform.RegistryImageNext + up
-	}
 	base.Cmd("pull", "--quiet", registryImage).AssertOK()
 	base.Cmd("pull", "--quiet", platform.DockerAuthImage).AssertOK()
 	base.Cmd("pull", "--quiet", platform.KuboImage).AssertOK()
@@ -161,7 +155,7 @@ acl:
 			return cmd.Error
 		}
 		joined := net.JoinHostPort(hostIP.String(), strconv.Itoa(port))
-		_, err = nettestutil.HTTPGet(fmt.Sprintf("%s://%s/auth", scheme, joined), 30, true)
+		_, err = nettestutil.HTTPGet(fmt.Sprintf("%s://%s/auth", scheme, joined), 5, true)
 		return err
 	}()
 
@@ -234,7 +228,7 @@ func (ba *BasicAuth) Params(base *testutil.Base) []string {
 		encryptedPass, _ := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
 		tmpDir, _ := os.MkdirTemp(base.T.TempDir(), "htpasswd")
 		ba.HtFile = filepath.Join(tmpDir, "htpasswd")
-		_ = os.WriteFile(ba.HtFile, []byte(fmt.Sprintf(`%s:%s`, ba.Username, string(encryptedPass[:]))), 0600)
+		_ = filesystem.WriteFile(ba.HtFile, []byte(fmt.Sprintf(`%s:%s`, ba.Username, string(encryptedPass[:]))), 0600)
 	}
 	ret := []string{
 		"--env", "REGISTRY_AUTH=htpasswd",
@@ -284,14 +278,6 @@ func NewRegistry(base *testutil.Base, ca *testca.CA, port int, auth Auth, boundC
 
 	args = append(args, auth.Params(base)...)
 	registryImage := testutil.RegistryImageStable
-
-	up := os.Getenv("DISTRIBUTION_VERSION")
-	if up != "" {
-		if up[0:1] != "v" {
-			up = "v" + up
-		}
-		registryImage = testutil.RegistryImageNext + up
-	}
 	args = append(args, registryImage)
 
 	cleanup := func(err error) {
@@ -354,7 +340,7 @@ func NewRegistry(base *testutil.Base, ca *testca.CA, port int, auth Auth, boundC
 			return "", cmd.Error
 		}
 
-		if _, err = nettestutil.HTTPGet(fmt.Sprintf("%s://%s:%s/v2", scheme, hostIP.String(), strconv.Itoa(port)), 30, true); err != nil {
+		if _, err = nettestutil.HTTPGet(fmt.Sprintf("%s://%s:%s/v2", scheme, hostIP.String(), strconv.Itoa(port)), 5, true); err != nil {
 			return "", err
 		}
 

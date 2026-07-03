@@ -44,6 +44,13 @@ type ContainerKillOptions struct {
 	KillSignal string
 }
 
+// ContainerExportOptions specifies options for `nerdctl (container) export`.
+type ContainerExportOptions struct {
+	Stdout io.Writer
+	// GOptions is the global options
+	GOptions GlobalCommandOptions
+}
+
 // ContainerCreateOptions specifies options for `nerdctl (container) create` and `nerdctl (container) run`.
 type ContainerCreateOptions struct {
 	Stdout io.Writer
@@ -140,7 +147,7 @@ type ContainerCreateOptions struct {
 	OomKillDisable bool
 	// OomScoreAdjChanged specifies whether the OOM preferences has been changed
 	OomScoreAdjChanged bool
-	// OomScoreAdj specifies the tune container’s OOM preferences (-1000 to 1000, rootless: 100 to 1000)
+	// OomScoreAdj specifies the tune container's OOM preferences (-1000 to 1000, rootless: 100 to 1000)
 	OomScoreAdj int
 	// PidsLimit specifies the tune container pids limit
 	PidsLimit int64
@@ -237,8 +244,6 @@ type ContainerCreateOptions struct {
 	// #endregion
 
 	// #region for metadata flags
-	// NameChanged specifies whether the name has been changed
-	NameChanged bool
 	// Name assign a name to the container
 	Name string
 	// Label set meta data on a container
@@ -285,6 +290,14 @@ type ContainerCreateOptions struct {
 
 	// ImagePullOpt specifies image pull options which holds the ImageVerifyOptions for verifying the image.
 	ImagePullOpt ImagePullOptions
+
+	// Healthcheck related fields
+	HealthCmd         string
+	HealthInterval    time.Duration
+	HealthTimeout     time.Duration
+	HealthRetries     int
+	HealthStartPeriod time.Duration
+	NoHealthcheck     bool
 
 	// UserNS name for user namespace mapping of container
 	UserNS string
@@ -385,7 +398,31 @@ type ContainerCommitOptions struct {
 	Change []string
 	// Pause container during commit
 	Pause bool
+	// Compression is set commit compression algorithm
+	Compression CompressionType
+	// Format specifies the image format for the committed image (docker or oci)
+	Format ImageFormat
+	// Embed EstargzOptions for eStargz conversion options
+	EstargzOptions
+	// Embed ZstdChunkedOptions for zstd:chunked conversion options
+	ZstdChunkedOptions
 }
+
+type CompressionType string
+
+const (
+	Zstd CompressionType = "zstd"
+	Gzip CompressionType = "gzip"
+)
+
+type ImageFormat string
+
+const (
+	// ImageFormatDocker uses Docker Schema2 media types for compatibility
+	ImageFormatDocker ImageFormat = "docker"
+	// ImageFormatOCI uses OCI Image Format media types
+	ImageFormatOCI ImageFormat = "oci"
+)
 
 // ContainerDiffOptions specifies options for `nerdctl (container) diff`.
 type ContainerDiffOptions struct {

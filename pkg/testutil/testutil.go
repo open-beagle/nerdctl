@@ -40,7 +40,6 @@ import (
 	"github.com/containerd/log"
 
 	"github.com/containerd/nerdctl/v2/pkg/buildkitutil"
-	"github.com/containerd/nerdctl/v2/pkg/imgutil"
 	"github.com/containerd/nerdctl/v2/pkg/infoutil"
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/dockercompat"
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/native"
@@ -292,7 +291,7 @@ func (b *Base) ContainerdAddress() string {
 		xdr = fmt.Sprintf("/run/user/%d", os.Geteuid())
 	}
 	pidFile := filepath.Join(xdr, "containerd-rootless", "child_pid")
-	pidB, err := os.ReadFile(pidFile)
+	pidB, err := filesystem.ReadFile(pidFile)
 	if err != nil {
 		b.T.Fatal(err)
 	}
@@ -534,7 +533,7 @@ func M(m *testing.M) {
 		defer filesystem.Unlock(lock)
 
 		// Create marker file
-		err = os.WriteFile(testLockFile, []byte("prevent testing from running in parallel for subpackages integration tests"), 0o666)
+		err = filesystem.WriteFile(testLockFile, []byte("prevent testing from running in parallel for subpackages integration tests"), 0o666)
 		if err != nil {
 			log.L.WithError(err).Errorf("failed writing lock file %q", testLockFile)
 			return 1
@@ -749,22 +748,10 @@ func Identifier(t testing.TB) string {
 	return s
 }
 
-// ImageRepo returns the image repo that can be used to, e.g, validate output
-// from `nerdctl images`.
-func ImageRepo(s string) string {
-	repo, _ := imgutil.ParseRepoTag(s)
-	return repo
-}
-
 // RegisterBuildCacheCleanup adds a 'builder prune --all --force' cleanup function
 // to run on test teardown.
 func RegisterBuildCacheCleanup(t *testing.T) {
 	t.Cleanup(func() {
 		NewBase(t).Cmd("builder", "prune", "--all", "--force").Run()
 	})
-}
-
-func mirrorOf(s string) string {
-	// plain mirror, NOT stargz-converted images
-	return fmt.Sprintf("ghcr.io/stargz-containers/%s-org", s)
 }

@@ -1,3 +1,5 @@
+//go:build !no_ipfs
+
 /*
    Copyright The containerd Authors.
 
@@ -14,26 +16,14 @@
    limitations under the License.
 */
 
-package filesystem
+package referenceutil
 
-import (
-	"os"
-	"path/filepath"
-)
+import "github.com/ipfs/go-cid"
 
-func AtomicWrite(parent string, fileName string, perm os.FileMode, data []byte) error {
-	dest := filepath.Join(parent, fileName)
-	temp := filepath.Join(parent, ".temp."+fileName)
-
-	err := os.WriteFile(temp, data, perm)
+func decodeCid(v string) (string, error) {
+	c, err := cid.Decode(v)
 	if err != nil {
-		return err
+		return "", err
 	}
-
-	err = os.Rename(temp, dest)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return c.String(), nil
 }

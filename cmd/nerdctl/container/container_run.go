@@ -33,10 +33,12 @@ import (
 	"github.com/containerd/nerdctl/v2/pkg/api/types"
 	"github.com/containerd/nerdctl/v2/pkg/clientutil"
 	"github.com/containerd/nerdctl/v2/pkg/cmd/container"
+	"github.com/containerd/nerdctl/v2/pkg/config"
 	"github.com/containerd/nerdctl/v2/pkg/consoleutil"
 	"github.com/containerd/nerdctl/v2/pkg/containerutil"
 	"github.com/containerd/nerdctl/v2/pkg/defaults"
 	"github.com/containerd/nerdctl/v2/pkg/errutil"
+	"github.com/containerd/nerdctl/v2/pkg/healthcheck"
 	"github.com/containerd/nerdctl/v2/pkg/labels"
 	"github.com/containerd/nerdctl/v2/pkg/logging"
 	"github.com/containerd/nerdctl/v2/pkg/netutil"
@@ -234,6 +236,14 @@ func setCreateFlags(cmd *cobra.Command) {
 	// rootfs flags (from Podman)
 	cmd.Flags().Bool("rootfs", false, "The first argument is not an image but the rootfs to the exploded container")
 
+	// Health check flags
+	cmd.Flags().String("health-cmd", "", "Command to run to check health")
+	cmd.Flags().Duration("health-interval", 0, "Time between running the check (default: 30s)")
+	cmd.Flags().Duration("health-timeout", 0, "Maximum time to allow one check to run (default: 30s)")
+	cmd.Flags().Int("health-retries", 0, "Consecutive failures needed to report unhealthy (default: 3)")
+	cmd.Flags().Duration("health-start-period", 0, "Start period for the container to initialize before starting health-retries countdown")
+	cmd.Flags().Bool("no-healthcheck", false, "Disable any container-specified HEALTHCHECK")
+
 	// #region env flags
 	// entrypoint needs to be StringArray, not StringSlice, to prevent "FOO=foo1,foo2" from being split to {"FOO=foo1", "foo2"}
 	// entrypoint StringArray is an internal implementation to support `nerdctl compose` entrypoint yaml filed with multiple strings
@@ -367,7 +377,7 @@ func runAction(cmd *cobra.Command, args []string) error {
 		return errors.New("flags -d and -a cannot be specified together")
 	}
 
-	netFlags, err := loadNetworkFlags(cmd)
+	netFlags, err := loadNetworkFlags(cmd, createOpt.GOptions)
 	if err != nil {
 		return fmt.Errorf("failed to load networking flags: %w", err)
 	}
@@ -426,8 +436,22 @@ func runAction(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+
+	statusC, err := task.Wait(ctx)
+	if err != nil {
+		return err
+	}
+
 	if err := task.Start(ctx); err != nil {
 		return err
+	}
+
+	// Setup container healthchecks.
+	if err := healthcheck.CreateTimer(ctx, c, (*config.Config)(&createOpt.GOptions)); err != nil {
+		return fmt.Errorf("failed to create healthcheck timer: %w", err)
+	}
+	if err := healthcheck.StartTimer(ctx, c, (*config.Config)(&createOpt.GOptions)); err != nil {
+		return fmt.Errorf("failed to start healthcheck timer: %w", err)
 	}
 
 	if createOpt.Detach {
@@ -445,10 +469,6 @@ func runAction(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	statusC, err := task.Wait(ctx)
-	if err != nil {
-		return err
-	}
 	select {
 	// io.Wait() would return when either 1) the user detaches from the container OR 2) the container is about to exit.
 	//

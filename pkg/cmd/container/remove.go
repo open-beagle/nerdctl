@@ -34,11 +34,13 @@ import (
 	"github.com/containerd/nerdctl/v2/pkg/clientutil"
 	"github.com/containerd/nerdctl/v2/pkg/containerutil"
 	"github.com/containerd/nerdctl/v2/pkg/dnsutil/hostsstore"
+	"github.com/containerd/nerdctl/v2/pkg/healthcheck"
 	"github.com/containerd/nerdctl/v2/pkg/idutil/containerwalker"
 	"github.com/containerd/nerdctl/v2/pkg/ipcutil"
 	"github.com/containerd/nerdctl/v2/pkg/labels"
 	"github.com/containerd/nerdctl/v2/pkg/mountutil/volumestore"
 	"github.com/containerd/nerdctl/v2/pkg/namestore"
+	"github.com/containerd/nerdctl/v2/pkg/portutil"
 	"github.com/containerd/nerdctl/v2/pkg/store"
 )
 
@@ -178,6 +180,11 @@ func RemoveContainer(ctx context.Context, c containerd.Container, globalOptions 
 		// Otherwise, nil the error so that we do not write the error label on the container
 		retErr = nil
 
+		// Clean up healthcheck systemd units
+		if err := healthcheck.RemoveTransientHealthCheckFiles(ctx, c); err != nil {
+			log.G(ctx).WithError(err).Warnf("failed to clean up healthcheck units for container %q", id)
+		}
+
 		// Now, delete the actual container
 		var delOpts []containerd.DeleteOpts
 		if _, err := c.Image(ctx); err == nil {
@@ -191,6 +198,18 @@ func RemoveContainer(ctx context.Context, c containerd.Container, globalOptions 
 		}
 
 		netOpts, err := containerutil.NetworkOptionsFromSpec(spec)
+		if err != nil {
+			retErr = err
+			return
+		}
+
+		portSlice, err := portutil.LoadPortMappings(dataStore, globalOptions.Namespace, id, containerLabels)
+		if err != nil {
+			retErr = err
+			return
+		}
+		netOpts.PortMappings = portSlice
+
 		if err == nil {
 			networkManager, err := containerutil.NewNetworkingOptionsManager(globalOptions, netOpts, client)
 			if err != nil {

@@ -46,6 +46,7 @@ import (
 	nerdconverter "github.com/containerd/nerdctl/v2/pkg/imgutil/converter"
 	"github.com/containerd/nerdctl/v2/pkg/imgutil/dockerconfigresolver"
 	"github.com/containerd/nerdctl/v2/pkg/imgutil/push"
+	"github.com/containerd/nerdctl/v2/pkg/internal/filesystem"
 	"github.com/containerd/nerdctl/v2/pkg/ipfs"
 	"github.com/containerd/nerdctl/v2/pkg/platformutil"
 	"github.com/containerd/nerdctl/v2/pkg/referenceutil"
@@ -85,7 +86,7 @@ func Push(ctx context.Context, client *containerd.Client, rawRef string, options
 				return err
 			}
 			defer os.RemoveAll(dir)
-			if err := os.WriteFile(filepath.Join(dir, "api"), []byte(options.IpfsAddress), 0600); err != nil {
+			if err := filesystem.WriteFile(filepath.Join(dir, "api"), []byte(options.IpfsAddress), 0600); err != nil {
 				return err
 			}
 			ipfsPath = dir
@@ -209,7 +210,7 @@ func Push(ctx context.Context, client *containerd.Client, rawRef string, options
 		return err
 	}
 	if options.GOptions.Snapshotter == "soci" {
-		if err = snapshotterutil.CreateSoci(ref, options.GOptions, options.AllPlatforms, options.Platforms, options.SociOptions); err != nil {
+		if err = snapshotterutil.CreateSociIndexV1(ref, options.GOptions, options.AllPlatforms, options.Platforms, options.SociOptions); err != nil {
 			return err
 		}
 		if err = snapshotterutil.PushSoci(ref, options.GOptions, options.AllPlatforms, options.Platforms); err != nil {

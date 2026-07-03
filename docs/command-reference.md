@@ -34,6 +34,7 @@ It does not necessarily mean that the corresponding features are missing in cont
   - [:whale: nerdctl attach](#whale-nerdctl-attach)
   - [:whale: nerdctl container prune](#whale-nerdctl-container-prune)
   - [:whale: nerdctl diff](#whale-nerdctl-diff)
+  - [:whale: nerdctl export](#whale-nerdctl-export)
 - [Build](#build)
   - [:whale: nerdctl build](#whale-nerdctl-build)
   - [:whale: nerdctl commit](#whale-nerdctl-commit)
@@ -43,6 +44,7 @@ It does not necessarily mean that the corresponding features are missing in cont
   - [:whale: nerdctl push](#whale-nerdctl-push)
   - [:whale: nerdctl load](#whale-nerdctl-load)
   - [:whale: nerdctl save](#whale-nerdctl-save)
+  - [:whale: nerdctl import](#whale-nerdctl-import)
   - [:whale: nerdctl tag](#whale-nerdctl-tag)
   - [:whale: nerdctl rmi](#whale-nerdctl-rmi)
   - [:whale: nerdctl image inspect](#whale-nerdctl-image-inspect)
@@ -51,6 +53,12 @@ It does not necessarily mean that the corresponding features are missing in cont
   - [:nerd_face: nerdctl image convert](#nerd_face-nerdctl-image-convert)
   - [:nerd_face: nerdctl image encrypt](#nerd_face-nerdctl-image-encrypt)
   - [:nerd_face: nerdctl image decrypt](#nerd_face-nerdctl-image-decrypt)
+- [Manifest management](#manifest-management)
+  - [:whale: nerdctl manifest annotate](#whale-nerdctl-manifest-annotate)
+  - [:whale: nerdctl manifest create](#whale-nerdctl-manifest-create)
+  - [:whale: nerdctl manifest inspect](#whale-nerdctl-manifest-inspect)
+  - [:whale: nerdctl manifest push](#whale-nerdctl-manifest-push)
+  - [:whale: nerdctl manifest rm](#whale-nerdctl-manifest-rm)
 - [Registry](#registry)
   - [:whale: nerdctl login](#whale-nerdctl-login)
   - [:whale: nerdctl logout](#whale-nerdctl-logout)
@@ -321,6 +329,16 @@ Metadata flags:
 - :whale: :blue_square: `--cidfile`: Write the container ID to the file
 - :nerd_face: `--pidfile`: file path to write the task's pid. The CLI syntax conforms to Podman convention.
 
+Health check flags:
+
+- :whale: :blue_square: `--health-cmd`: Command to run to check container health
+- :whale: :blue_square: `--health-interval`: Time between running the check (e.g., 30s, 1m)
+- :whale: :blue_square: `--health-timeout`: Time to wait before considering the check failed (e.g., 5s)
+- :whale: :blue_square: `--health-retries`: Number of failures before container is considered unhealthy
+- :whale: :blue_square: `--health-start-period`: Start period for the container to initialize before starting health-retries countdown
+- :whale: :blue_square: `--health-start-interval`: Interval between checks during the start period
+- :whale: :blue_square: `--no-healthcheck`: Disable any health checks defined by image or CLI
+
 Logging flags:
 
 - :whale: `--log-driver=(json-file|journald|fluentd|syslog|none)`: Logging driver for the container (default `json-file`).
@@ -428,7 +446,7 @@ IPFS flags:
 - :nerd_face: `--ipfs-address`: Multiaddr of IPFS API (default uses `$IPFS_PATH` env variable if defined or local directory `~/.ipfs`)
 
 Unimplemented `docker run` flags:
-    `--device-cgroup-rule`, `--disable-content-trust`, `--expose`, `--health-*`, `--isolation`, `--no-healthcheck`,
+    `--device-cgroup-rule`, `--disable-content-trust`, `--expose`, `--isolation`,
     `--link*`, `--publish-all`, `--storage-opt`, `--volume-driver`
 
 ### :whale: :blue_square: nerdctl exec
@@ -536,8 +554,6 @@ Flags:
 - :whale: `--format`: Format the output using the given Go template, e.g, `{{json .}}`
 - :whale: `--type`: Return JSON for specified type
 - :whale: `--size`: Display total file sizes if the type is container
-
-Unimplemented `docker inspect` flags:  `--size`
 
 ### :whale: nerdctl logs
 
@@ -709,6 +725,12 @@ Inspect changes to files or directories on a container's filesystem
 
 Usage: `nerdctl diff CONTAINER`
 
+### :whale: nerdctl export
+
+Export a containers filesystem as a tar archive.
+
+Usage: `nerdctl export CONTAINER`
+
 ## Build
 
 ### :whale: nerdctl build
@@ -766,6 +788,16 @@ Flags:
 - :whale: `-m, --message`: Commit message
 - :whale: `-c, --change`: Apply Dockerfile instruction to the created image (supported directives: [CMD, ENTRYPOINT])
 - :whale: `-p, --pause`: Pause container during commit (default: true)
+- :nerd_face: `--compression`: Commit compression algorithm (supported values: zstd or gzip) (default: gzip) (zstd is generally better for compression ratio but might not be as widely supported)
+- :nerd_face: `--format`: Format of the committed image (supported values: docker or oci) (default: docker) (docker uses Docker Schema2 media types for compatibility, oci uses OCI image format media types)
+- :nerd_face: `--estargz`: Convert the committed layer to eStargz for lazy pulling
+- :nerd_face: `--estargz-compression-level`: eStargz compression level (1-9) (default: 9)
+- :nerd_face: `--estargz-chunk-size`: eStargz chunk size
+- :nerd_face: `--estargz-min-chunk-size`: The minimal number of bytes of data must be written in one gzip stream
+- :nerd_face: `--zstdchunked`: Convert the committed layer to zstd:chunked for lazy pulling
+support zstdchunked convert
+- :nerd_face: `--zstdchunked-compression-level`: zstd:chunked compression level (default: 3)
+- :nerd_face: `--zstdchunked-chunk-size`: zstd:chunked chunk size
 
 ## Image management
 
@@ -874,6 +906,19 @@ Flags:
 - :nerd_face: `--platform=(amd64|arm64|...)`: Export content for a specific platform
 - :nerd_face: `--all-platforms`: Export content for all platforms
 
+### :whale: nerdctl import
+
+Import the contents from a tarball to create a filesystem image.
+
+Usage: `nerdctl import [OPTIONS] file|URL|- [REPOSITORY[:TAG]]`
+
+Flags:
+
+- :whale: `-m, --message`: Set commit message for imported image
+- :nerd_face: `--platform=(linux/amd64|linux/arm64|...)`: Set platform for the imported image
+
+Unimplemented `docker import` flags: `--change`
+
 ### :whale: nerdctl tag
 
 Create a tag TARGET\_IMAGE that refers to SOURCE\_IMAGE.
@@ -959,6 +1004,11 @@ Flags:
 - `--oci`                              : convert Docker media types to OCI media types
 - `--platform=<PLATFORM>`              : convert content for a specific platform
 - `--all-platforms`                    : convert content for all platforms (default: false)
+- `--soci`                             : convert content to SOCI image manifest v2
+*[**Note**: soci convert uses the default platform if nothing is specified. --platform flag can be used to specify a platform]*
+- `--soci-span-size` : Span size in bytes that soci index uses to segment layer data. Default is 4 MiB.
+- `--soci-min-layer-size`: Minimum layer size in bytes to build zTOC for. Smaller layers won't have zTOC and not lazy pulled. Default is 10 MiB.
+
 
 ### :nerd_face: nerdctl image encrypt
 
@@ -1010,6 +1060,99 @@ Flags:
 - `--platform=<PLATFORM>`        : Convert content for a specific platform
 - `--all-platforms`              : Convert content for all platforms (default: false)
 
+## Manifest management
+
+### :whale: nerdctl manifest annotate
+
+Add additional information to a local image manifest.
+
+Usage: `nerdctl manifest annotate [OPTIONS] INDEX/MANIFESTLIST MANIFEST`
+
+Flags:
+
+- :whale: `--os`: Set operating system (e.g., "linux", "windows", "freebsd")
+- :whale: `--arch`: Set architecture (e.g., "amd64", "arm64", "arm")
+- :whale: `--os-version`: Set operating system version (e.g., "10.0.19041")
+- :whale: `--variant`: Set architecture variant (e.g., "v7", "v8")
+- :whale: `--os-features`: Set operating system features (e.g., "win32k")
+
+Examples:
+
+```bash
+nerdctl manifest annotate myapp:latest alpine@sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f \
+  --os linux --arch arm --variant v7 --os-features feature1,feature2
+```
+
+### :whale: nerdctl manifest create
+
+Create a local index/manifest list.
+
+Usage: `nerdctl manifest create [OPTIONS] INDEX/MANIFESTLIST MANIFEST [MANIFEST...]`
+
+Flags:
+
+- `--amend`: Amend the existing index/manifest list
+- `--insecure`: Allow communication with an insecure registry
+
+Example:
+
+```bash
+nerdctl manifest create myapp:latest alpine@sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f
+```
+
+### :whale: nerdctl manifest inspect
+
+Display the contents of a manifest list or manifest.
+
+Usage: `nerdctl manifest inspect [OPTIONS] MANIFEST`
+
+#### Input formats
+
+You can specify the manifest to inspect using one of the following formats:
+- **Image name with tag**: `alpine:3.22.1`
+- **Image name with digest**: `alpine@sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f`
+
+Flags:
+
+- `--verbose` : Verbose output, show additional info including layers and platform
+- `--insecure`: Allow communication with an insecure registry
+Example:
+
+```bash
+nerdctl manifest inspect alpine:3.22.1
+nerdctl manifest inspect alpine@sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f
+```
+
+### :whale: nerdctl manifest push
+
+Push a manifest list to a registry.
+
+Usage: `nerdctl manifest push [OPTIONS] INDEX/MANIFESTLIST`
+
+Flags:
+
+- `--insecure`: Allow communication with an insecure registry
+- `--purge`: Remove the manifest list after pushing
+
+Examples:
+
+```bash
+# Push a manifest list to a registry
+nerdctl manifest push myapp:latest
+```
+
+### :whale: nerdctl manifest rm
+
+Remove one or more index/manifest lists.
+
+Usage: `nerdctl manifest rm INDEX/MANIFESTLIST [INDEX/MANIFESTLIST...]`
+
+Example:
+
+```bash
+nerdctl manifest rm alpine:3.22.1 alpine:3.22.2
+```
+
 ## Registry
 
 ### :whale: nerdctl login
@@ -1050,6 +1193,8 @@ Flags:
 - :whale: `-o, --opt`: Set driver specific options
   - :whale: `--opt=com.docker.network.driver.mtu=<MTU>`: Set the containers network MTU
   - :nerd_face: `--opt=mtu=<MTU>`: Alias of `--opt=com.docker.network.driver.mtu=<MTU>`
+  - :whale: `--opt=com.docker.network.bridge.enable_icc=<true/false>`: Enable or Disable inter-container connectivity
+  - :nerd_face: `--opt=icc=<true/false>`: Alias of `--opt=com.docker.network.bridge.enable_icc`
   - :whale: `--opt=macvlan_mode=(bridge)>`: Set macvlan network mode (default: bridge)
   - :whale: `--opt=ipvlan_mode=(l2|l3)`: Set IPvlan network mode (default: l2)
   - :nerd_face: `--opt=mode=(bridge|l2|l3)`: Alias of `--opt=macvlan_mode=(bridge)` and `--opt=ipvlan_mode=(l2|l3)`
@@ -1064,8 +1209,9 @@ Flags:
 - :whale: `--ip-range`: Allocate container ip from a sub-range
 - :whale: `--label`: Set metadata on a network
 - :whale: `--ipv6`: Enable IPv6. Should be used with a valid subnet.
+- :whale: `--internal`: Restrict external access to the network.
 
-Unimplemented `docker network create` flags: `--attachable`, `--aux-address`, `--config-from`, `--config-only`, `--ingress`, `--internal`, `--scope`
+Unimplemented `docker network create` flags: `--attachable`, `--aux-address`, `--config-from`, `--config-only`, `--ingress`, `--scope`
 
 ### :whale: nerdctl network ls
 
@@ -1219,6 +1365,7 @@ Usage: `nerdctl namespace ls [OPTIONS]`
 Flags:
 
 - `-q, --quiet`: Only display namespace names
+- `-f, --format`: Format the output using the given Go template, e.g, `{{json .}}`
 
 ### :nerd_face: :blue_square: nerdctl namespace remove
 
@@ -1454,7 +1601,7 @@ Flags:
 - :whale: `--pull`: Pull image before running ("always"|"missing"|"never")
 
 Unimplemented `docker-compose up` (V1) flags: `--no-deps`, `--always-recreate-deps`,
-`--no-start`, `--abort-on-container-exit`, `--attach-dependencies`, `--timeout`, `--renew-anon-volumes`, `--exit-code-from`
+`--no-start`, `--attach-dependencies`, `--timeout`, `--renew-anon-volumes`, `--exit-code-from`
 
 Unimplemented `docker compose up` (V2) flags: `--environment`
 
@@ -1789,9 +1936,7 @@ Container management:
 
 Image:
 
-- `docker export` and `docker import`
 - `docker trust *` (Instead, nerdctl supports `nerdctl pull --verify=cosign|notation` and `nerdctl push --sign=cosign|notation`. See [`./cosign.md`](./cosign.md) and [`./notation.md`](./notation.md).)
-- `docker manifest *`
 
 Network management:
 

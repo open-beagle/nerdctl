@@ -36,10 +36,10 @@ import (
 
 	"github.com/containerd/containerd/v2/defaults"
 	"github.com/containerd/containerd/v2/pkg/netns"
-	"github.com/containerd/errdefs"
 	"github.com/containerd/nerdctl/mod/tigron/expect"
 	"github.com/containerd/nerdctl/mod/tigron/require"
 	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/tig"
 
 	"github.com/containerd/nerdctl/v2/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
@@ -247,7 +247,7 @@ func TestRunPortWithNoHostPort(t *testing.T) {
 				return
 			}
 			connectURL := fmt.Sprintf("http://%s:%s", "127.0.0.1", paramsMap["portNumber"])
-			resp, err := nettestutil.HTTPGet(connectURL, 30, false)
+			resp, err := nettestutil.HTTPGet(connectURL, 5, false)
 			assert.NilError(t, err)
 			respBody, err := io.ReadAll(resp.Body)
 			assert.NilError(t, err)
@@ -332,7 +332,7 @@ func TestUniqueHostPortAssignement(t *testing.T) {
 
 			// Make HTTP GET request to container 1
 			connectURL1 := fmt.Sprintf("http://%s:%s", "127.0.0.1", port1)
-			resp1, err := nettestutil.HTTPGet(connectURL1, 30, false)
+			resp1, err := nettestutil.HTTPGet(connectURL1, 5, false)
 			assert.NilError(t, err)
 			respBody1, err := io.ReadAll(resp1.Body)
 			assert.NilError(t, err)
@@ -340,7 +340,7 @@ func TestUniqueHostPortAssignement(t *testing.T) {
 
 			// Make HTTP GET request to container 2
 			connectURL2 := fmt.Sprintf("http://%s:%s", "127.0.0.1", port2)
-			resp2, err := nettestutil.HTTPGet(connectURL2, 30, false)
+			resp2, err := nettestutil.HTTPGet(connectURL2, 5, false)
 			assert.NilError(t, err)
 			respBody2, err := io.ReadAll(resp2.Body)
 			assert.NilError(t, err)
@@ -349,26 +349,81 @@ func TestUniqueHostPortAssignement(t *testing.T) {
 	}
 }
 
+func TestHostPortAlreadyInUse(t *testing.T) {
+	testCases := []struct {
+		hostPort      string
+		containerPort string
+	}{
+		{
+			hostPort:      "5000",
+			containerPort: "80/tcp",
+		},
+		{
+			hostPort:      "5000",
+			containerPort: "80/tcp",
+		},
+		{
+			hostPort:      "5000",
+			containerPort: "80/udp",
+		},
+		{
+			hostPort:      "5000",
+			containerPort: "80/sctp",
+		},
+	}
+
+	tID := testutil.Identifier(t)
+
+	for i, tc := range testCases {
+		tc := tc
+		tcName := fmt.Sprintf("%+v", tc)
+		t.Run(tcName, func(t *testing.T) {
+			if strings.Contains(tc.containerPort, "sctp") && rootlessutil.IsRootless() {
+				t.Skip("sctp is not supported in rootless mode")
+			}
+			testContainerName1 := fmt.Sprintf("%s-%d-1", tID, i)
+			testContainerName2 := fmt.Sprintf("%s-%d-2", tID, i)
+			base := testutil.NewBase(t)
+			t.Cleanup(func() {
+				base.Cmd("rm", "-f", testContainerName1, testContainerName2).AssertOK()
+			})
+			pFlag := fmt.Sprintf("%s:%s", tc.hostPort, tc.containerPort)
+			cmd1 := base.Cmd("run", "-d",
+				"--name", testContainerName1, "-p",
+				pFlag,
+				testutil.NginxAlpineImage)
+
+			cmd2 := base.Cmd("run", "-d",
+				"--name", testContainerName2, "-p",
+				pFlag,
+				testutil.NginxAlpineImage)
+
+			cmd1.AssertOK()
+			cmd2.AssertFail()
+		})
+	}
+}
+
 func TestRunPort(t *testing.T) {
 	baseTestRunPort(t, testutil.NginxAlpineImage, testutil.NginxAlpineIndexHTMLSnippet, true)
 }
 
-func TestRunWithInvalidPortThenCleanUp(t *testing.T) {
+func TestRunWithManyPortsThenCleanUp(t *testing.T) {
 	testCase := nerdtest.Setup()
 	// docker does not set label restriction to 4096 bytes
 	testCase.Require = require.Not(nerdtest.Docker)
 
 	testCase.SubTests = []*test.Case{
 		{
-			Description: "Run a container with invalid ports, and then clean up.",
+			Description: "Run a container with many ports, and then clean up.",
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("run", "--data-root", data.Temp().Path(), "--rm", "-p", "22200-22299:22200-22299", testutil.CommonImage)
 			},
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
-					ExitCode: 1,
-					Errors:   []error{errdefs.ErrInvalidArgument},
-					Output: func(stdout string, info string, t *testing.T) {
+					ExitCode: 0,
+					Errors:   []error{},
+					Output: func(stdout string, t tig.T) {
 						getAddrHash := func(addr string) string {
 							const addrHashLen = 8
 
@@ -544,7 +599,6 @@ func TestSharedNetworkSetup(t *testing.T) {
 						Description: "Test network is shared",
 						Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 							return helpers.Command("exec", data.Labels().Get("container2"), "wget", "-qO-", "http://127.0.0.1:80")
-
 						},
 						Expected: test.Expects(0, nil, expect.Contains(testutil.NginxAlpineIndexHTMLSnippet)),
 					},
@@ -884,7 +938,7 @@ func TestHostNetworkHostName(t *testing.T) {
 		Require: require.Not(require.Windows),
 		Setup: func(data test.Data, helpers test.Helpers) {
 			helpers.Custom("cat", "/etc/hostname").Run(&test.Expected{
-				Output: func(stdout, info string, t *testing.T) {
+				Output: func(stdout string, t tig.T) {
 					data.Labels().Set("hostHostname", stdout)
 				},
 			})
@@ -939,6 +993,145 @@ func TestHostNetworkDnsConfigs(t *testing.T) {
 			"attempts:5",
 			"timeout:3",
 		)),
+	}
+	testCase.Run(t)
+}
+
+func TestDNSWithGlobalConfig(t *testing.T) {
+	var configContent test.ConfigValue = `debug = false
+debug_full = false
+dns = ["10.10.10.10", "20.20.20.20"]
+dns_opts = ["ndots:2", "timeout:5"]
+dns_search = ["example.com", "test.local"]`
+
+	nerdtest.Setup()
+
+	testCase := &test.Case{
+		Config: test.WithConfig(nerdtest.NerdctlToml, configContent),
+		// NERDCTL_TOML not supported in Docker
+		Require: require.Not(nerdtest.Docker),
+		SubTests: []*test.Case{
+			{
+				Description: "Global DNS settings are used when command line options are not provided",
+				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+					nerdctlTomlContent := string(helpers.Read(nerdtest.NerdctlToml))
+					helpers.T().Log("NERDCTL_TOML file content:\n%s", nerdctlTomlContent)
+					cmd := helpers.Command("run", "--rm", testutil.CommonImage, "cat", "/etc/resolv.conf")
+					return cmd
+				},
+				Expected: test.Expects(expect.ExitCodeSuccess, nil, expect.All(
+					expect.Contains("nameserver 10.10.10.10"),
+					expect.Contains("nameserver 20.20.20.20"),
+					expect.Contains("search example.com test.local"),
+					expect.Contains("options ndots:2 timeout:5"),
+				)),
+			},
+			{
+				Description: "Command line DNS options override global config",
+				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+					nerdctlTomlContent := string(helpers.Read(nerdtest.NerdctlToml))
+					helpers.T().Log("NERDCTL_TOML file content:\n%s", nerdctlTomlContent)
+					cmd := helpers.Command("run", "--rm",
+						"--dns", "9.9.9.9",
+						"--dns-search", "override.com",
+						"--dns-opt", "ndots:3",
+						testutil.CommonImage, "cat", "/etc/resolv.conf")
+					return cmd
+				},
+				Expected: test.Expects(expect.ExitCodeSuccess, nil, expect.All(
+					expect.Contains("nameserver 9.9.9.9"),
+					expect.Contains("search override.com"),
+					expect.Contains("options ndots:3"),
+				)),
+			},
+			{
+				Description: "Global DNS settings should also apply when using host network",
+				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+					nerdctlTomlContent := string(helpers.Read(nerdtest.NerdctlToml))
+					helpers.T().Log("NERDCTL_TOML file content:\n%s", nerdctlTomlContent)
+					cmd := helpers.Command("run", "--rm", "--network", "host",
+						testutil.CommonImage, "cat", "/etc/resolv.conf")
+					return cmd
+				},
+				Expected: test.Expects(expect.ExitCodeSuccess, nil, expect.All(
+					expect.Contains("nameserver 10.10.10.10"),
+					expect.Contains("nameserver 20.20.20.20"),
+					expect.Contains("search example.com test.local"),
+					expect.Contains("options ndots:2 timeout:5"),
+				)),
+			},
+			{
+				Description: "Global DNS settings should also apply when using none network",
+				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+					nerdctlTomlContent := string(helpers.Read(nerdtest.NerdctlToml))
+					helpers.T().Log("NERDCTL_TOML file content:\n%s", nerdctlTomlContent)
+					cmd := helpers.Command("run", "--rm", "--network", "none",
+						testutil.CommonImage, "cat", "/etc/resolv.conf")
+					return cmd
+				},
+				Expected: test.Expects(expect.ExitCodeSuccess, nil, expect.All(
+					expect.Contains("nameserver 10.10.10.10"),
+					expect.Contains("nameserver 20.20.20.20"),
+					expect.Contains("search example.com test.local"),
+					expect.Contains("options ndots:2 timeout:5"),
+				)),
+			},
+		},
+	}
+	testCase.Run(t)
+}
+
+// TestReservePorts tests that a published port appears
+// as a listening port on the host.
+// See https://github.com/containerd/nerdctl/pull/4526
+func TestReservePorts(t *testing.T) {
+	nerdtest.Setup()
+	testCase := &test.Case{
+		Require: require.All(
+			require.Not(require.Windows),
+			require.Not(nerdtest.RootlessWithoutDetachNetNS), // RootlessKit v1
+		),
+		NoParallel: true,
+		SubTests: []*test.Case{
+			{
+				Description: "TCP",
+				Setup: func(data test.Data, helpers test.Helpers) {
+					helpers.Ensure("run", "-d", "--name", data.Identifier("nginx"),
+						"-p", "60080:80", testutil.NginxAlpineImage)
+					nerdtest.EnsureContainerStarted(helpers, data.Identifier("nginx"))
+					time.Sleep(3 * time.Second)
+				},
+				Cleanup: func(data test.Data, helpers test.Helpers) {
+					helpers.Anyhow("rm", "-f", data.Identifier("nginx"))
+				},
+				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+					return helpers.Command("run", "--rm",
+						"--network=host", testutil.CommonImage, "netstat", "-lnt")
+				},
+				Expected: test.Expects(expect.ExitCodeSuccess, nil, expect.All(
+					expect.Contains(":60080"),
+				)),
+			},
+			{
+				Description: "UDP",
+				Setup: func(data test.Data, helpers test.Helpers) {
+					helpers.Ensure("run", "-d", "--name", data.Identifier("coredns"),
+						"-p", "60053:53/udp", testutil.CoreDNSImage)
+					nerdtest.EnsureContainerStarted(helpers, data.Identifier("coredns"))
+					time.Sleep(3 * time.Second)
+				},
+				Cleanup: func(data test.Data, helpers test.Helpers) {
+					helpers.Anyhow("rm", "-f", data.Identifier("coredns"))
+				},
+				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+					return helpers.Command("run", "--rm",
+						"--network=host", testutil.CommonImage, "netstat", "-lnu")
+				},
+				Expected: test.Expects(expect.ExitCodeSuccess, nil, expect.All(
+					expect.Contains(":60053"),
+				)),
+			},
+		},
 	}
 	testCase.Run(t)
 }

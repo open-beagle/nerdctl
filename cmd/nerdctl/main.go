@@ -40,6 +40,7 @@ import (
 	"github.com/containerd/nerdctl/v2/cmd/nerdctl/internal"
 	"github.com/containerd/nerdctl/v2/cmd/nerdctl/ipfs"
 	"github.com/containerd/nerdctl/v2/cmd/nerdctl/login"
+	"github.com/containerd/nerdctl/v2/cmd/nerdctl/manifest"
 	"github.com/containerd/nerdctl/v2/cmd/nerdctl/namespace"
 	"github.com/containerd/nerdctl/v2/cmd/nerdctl/network"
 	"github.com/containerd/nerdctl/v2/cmd/nerdctl/system"
@@ -188,6 +189,9 @@ func initRootCmdFlags(rootCmd *cobra.Command, tomlPath string) (*pflag.FlagSet, 
 	rootCmd.PersistentFlags().Bool("kube-hide-dupe", cfg.KubeHideDupe, "Deduplicate images for Kubernetes with namespace k8s.io")
 	rootCmd.PersistentFlags().StringSlice("cdi-spec-dirs", cfg.CDISpecDirs, "The directories to search for CDI spec files. Defaults to /etc/cdi,/var/run/cdi")
 	rootCmd.PersistentFlags().String("userns-remap", cfg.UsernsRemap, "Support idmapping for creating and running containers. This options is only supported on linux. If `host` is passed, no idmapping is done. if a user name is passed, it does idmapping based on the uidmap and gidmap ranges specified in /etc/subuid and /etc/subgid respectively")
+	helpers.HiddenPersistentStringArrayFlag(rootCmd, "global-dns", cfg.DNS, "Global DNS servers for containers")
+	helpers.HiddenPersistentStringArrayFlag(rootCmd, "global-dns-opts", cfg.DNSOpts, "Global DNS options for containers")
+	helpers.HiddenPersistentStringArrayFlag(rootCmd, "global-dns-search", cfg.DNSSearch, "Global DNS search domains for containers")
 	return aliasToBeInherited, nil
 }
 
@@ -284,9 +288,11 @@ Config file ($NERDCTL_TOML): %s
 		container.PauseCommand(),
 		container.UnpauseCommand(),
 		container.CommitCommand(),
+		container.ExportCommand(),
 		container.WaitCommand(),
 		container.RenameCommand(),
 		container.AttachCommand(),
+		container.HealthCheckCommand(),
 		// #endregion
 
 		// Build
@@ -298,6 +304,7 @@ Config file ($NERDCTL_TOML): %s
 		image.PushCommand(),
 		image.LoadCommand(),
 		image.SaveCommand(),
+		image.ImportCommand(),
 		image.TagCommand(),
 		image.RmiCommand(),
 		image.HistoryCommand(),
@@ -340,6 +347,9 @@ Config file ($NERDCTL_TOML): %s
 
 		// IPFS
 		ipfs.NewIPFSCommand(),
+
+		// Manifest
+		manifest.Command(),
 	)
 	addApparmorCommand(rootCmd)
 	container.AddCpCommand(rootCmd)

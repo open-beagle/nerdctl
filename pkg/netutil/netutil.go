@@ -37,6 +37,7 @@ import (
 	"github.com/containerd/log"
 
 	"github.com/containerd/nerdctl/v2/pkg/api/types"
+	"github.com/containerd/nerdctl/v2/pkg/internal/filesystem"
 	"github.com/containerd/nerdctl/v2/pkg/labels"
 	"github.com/containerd/nerdctl/v2/pkg/netutil/nettype"
 	subnetutil "github.com/containerd/nerdctl/v2/pkg/netutil/subnet"
@@ -305,11 +306,11 @@ func (e *CNIEnv) CreateNetwork(opts types.NetworkCreateOptions) (*NetworkConfig,
 	if _, ok := netMap[opts.Name]; ok {
 		return nil, errdefs.ErrAlreadyExists
 	}
-	ipam, err := e.generateIPAM(opts.IPAMDriver, opts.Subnets, opts.Gateway, opts.IPRange, opts.IPAMOptions, opts.IPv6)
+	ipam, err := e.generateIPAM(opts.IPAMDriver, opts.Subnets, opts.Gateway, opts.IPRange, opts.IPAMOptions, opts.IPv6, opts.Internal)
 	if err != nil {
 		return nil, err
 	}
-	plugins, err := e.generateCNIPlugins(opts.Driver, opts.Name, ipam, opts.Options, opts.IPv6)
+	plugins, err := e.generateCNIPlugins(opts.Driver, opts.Name, ipam, opts.Options, opts.IPv6, opts.Internal)
 	if err != nil {
 		return nil, err
 	}
@@ -481,7 +482,7 @@ func cniLoad(fileNames []string) (configList []*NetworkConfig, err error) {
 
 	for _, fileName = range fileNames {
 		var bytes []byte
-		bytes, err = os.ReadFile(fileName)
+		bytes, err = filesystem.ReadFile(fileName)
 		if err != nil {
 			return nil, fmt.Errorf("error reading %s: %w", fileName, err)
 		}

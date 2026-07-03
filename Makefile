@@ -46,6 +46,9 @@ LINT_COMMIT_RANGE ?= main..HEAD
 GO_BUILD_LDFLAGS ?= -s -w
 GO_BUILD_FLAGS ?=
 
+BUILDTAGS ?=
+GO_TAGS=$(if $(BUILDTAGS),-tags "$(strip $(BUILDTAGS))",)
+
 ##########################
 # Helpers
 ##########################
@@ -54,7 +57,7 @@ ifdef VERBOSE
 	VERBOSE_FLAG_LONG := --verbose
 endif
 
-export GO_BUILD=CGO_ENABLED=0 GOOS=$(GOOS) $(GO) -C $(MAKEFILE_DIR) build -ldflags "$(GO_BUILD_LDFLAGS) $(VERBOSE_FLAG) -X $(PACKAGE)/pkg/version.Version=$(VERSION) -X $(PACKAGE)/pkg/version.Revision=$(REVISION)"
+export GO_BUILD=CGO_ENABLED=0 GOOS=$(GOOS) $(GO) -C $(MAKEFILE_DIR) build $(GO_TAGS) -ldflags "$(GO_BUILD_LDFLAGS) $(VERBOSE_FLAG) -X $(PACKAGE)/pkg/version.Version=$(VERSION) -X $(PACKAGE)/pkg/version.Revision=$(REVISION)"
 
 ifndef NO_COLOR
     NC := \033[0m
@@ -182,7 +185,7 @@ lint-licenses-all:
 		&& GOOS=linux make lint-licenses \
 		&& GOOS=windows make lint-licenses \
 		&& GOOS=freebsd make lint-licenses \
-		&& GOOS=darwin make lint-go
+		&& GOOS=darwin make lint-licenses
 	$(call footer, $@)
 
 ##########################
@@ -200,7 +203,7 @@ fix-go-all:
 		&& GOOS=linux make fix-go \
 		&& GOOS=windows make fix-go \
 		&& GOOS=freebsd make fix-go \
-		&& GOOS=darwin make lint-go
+		&& GOOS=darwin make fix-go
 	$(call footer, $@)
 
 fix-mod:
@@ -214,16 +217,18 @@ fix-mod:
 ##########################
 install-dev-tools:
 	$(call title, $@)
-	# golangci: v2.0.2 (2024-03-26)
+	# golangci: v2.4.0 (2025-08-14)
 	# git-validation: main (2025-02-25)
 	# ltag: main (2025-03-04)
 	# go-licenses: v2.0.0-alpha.1 (2024-06-27)
+	# stubbing go-licenses with dependency upgrade due to non-compatibility with golang 1.25rc1
+	# Issue: https://github.com/google/go-licenses/issues/312
 	@cd $(MAKEFILE_DIR) \
-		&& go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@2b224c2cf4c9f261c22a16af7f8ca6408467f338 \
+	        && go install github.com/Shubhranshu153/go-licenses/v2@f8c503d1357dffb6c97ed3b94e912ab294dde24a \
+		&& go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@43d03392d7dc3746fa776dbddd66dfcccff70651 \
 		&& go install github.com/vbatts/git-validation@7b60e35b055dd2eab5844202ffffad51d9c93922 \
 		&& go install github.com/containerd/ltag@66e6a514664ee2d11a470735519fa22b1a9eaabd \
-		&& go install github.com/google/go-licenses/v2@d01822334fba5896920a060f762ea7ecdbd086e8 \
-		&& go install gotest.tools/gotestsum@ac6dad9c7d87b969004f7749d1942938526c9716
+		&& go install gotest.tools/gotestsum@0d9599e513d70e5792bb9334869f82f6e8b53d4d
 	@echo "Remember to add \$$HOME/go/bin to your path"
 	$(call footer, $@)
 
@@ -253,7 +258,7 @@ TAR_OWNER0_FLAGS=--owner=0 --group=0
 TAR_FLATTEN_FLAGS=--transform 's/.*\///g'
 
 define make_artifact_full_linux
-	$(DOCKER) build --output type=tar,dest=$(CURDIR)/_output/nerdctl-full-$(VERSION_TRIMMED)-linux-$(1).tar --target out-full --platform $(1) --build-arg GO_VERSION -f $(MAKEFILE_DIR)/Dockerfile $(MAKEFILE_DIR)
+	$(DOCKER) build --secret id=github_token,env=GITHUB_TOKEN --output type=tar,dest=$(CURDIR)/_output/nerdctl-full-$(VERSION_TRIMMED)-linux-$(1).tar --target out-full --platform $(1) --build-arg GO_VERSION -f $(MAKEFILE_DIR)/Dockerfile $(MAKEFILE_DIR)
 	gzip -9 $(CURDIR)/_output/nerdctl-full-$(VERSION_TRIMMED)-linux-$(1).tar
 endef
 

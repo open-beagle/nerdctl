@@ -19,7 +19,7 @@ package types
 import (
 	"io"
 
-	"github.com/opencontainers/image-spec/specs-go/v1"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // ImageListOptions specifies options for `nerdctl image list`.
@@ -67,7 +67,17 @@ type ImageConvertOptions struct {
 	// Format the output using the given Go template, e.g, 'json'
 	Format string
 
-	// #region estargz flags
+	// Embed image format options
+	EstargzOptions
+	ZstdOptions
+	ZstdChunkedOptions
+	NydusOptions
+	OverlaybdOptions
+	SociConvertOptions
+}
+
+// EstargzOptions contains eStargz conversion options
+type EstargzOptions struct {
 	// Estargz convert legacy tar(.gz) layers to eStargz for lazy pulling. Should be used in conjunction with '--oci'
 	Estargz bool
 	// EstargzRecordIn read 'ctr-remote optimize --record-out=<FILE>' record file (EXPERIMENTAL)
@@ -82,16 +92,18 @@ type ImageConvertOptions struct {
 	EstargzExternalToc bool
 	// EstargzKeepDiffID convert to esgz without changing diffID (cannot be used in conjunction with '--estargz-record-in'. must be specified with '--estargz-external-toc')
 	EstargzKeepDiffID bool
-	// #endregion
+}
 
-	// #region zstd flags
+// ZstdOptions contains zstd conversion options
+type ZstdOptions struct {
 	// Zstd convert legacy tar(.gz) layers to zstd. Should be used in conjunction with '--oci'
 	Zstd bool
 	// ZstdCompressionLevel zstd compression level
 	ZstdCompressionLevel int
-	// #endregion
+}
 
-	// #region zstd:chunked flags
+// ZstdChunkedOptions contains zstd:chunked conversion options
+type ZstdChunkedOptions struct {
 	// ZstdChunked convert legacy tar(.gz) layers to zstd:chunked for lazy pulling. Should be used in conjunction with '--oci'
 	ZstdChunked bool
 	// ZstdChunkedCompressionLevel zstd compression level
@@ -100,9 +112,10 @@ type ImageConvertOptions struct {
 	ZstdChunkedChunkSize int
 	// ZstdChunkedRecordIn read 'ctr-remote optimize --record-out=<FILE>' record file (EXPERIMENTAL)
 	ZstdChunkedRecordIn string
-	// #endregion
+}
 
-	// #region nydus flags
+// NydusOptions contains nydus conversion options
+type NydusOptions struct {
 	// Nydus convert legacy tar(.gz) layers to nydus for lazy pulling. Should be used in conjunction with '--oci'
 	Nydus bool
 	// NydusBuilderPath the nydus-image binary path, if unset, search in PATH environment
@@ -113,9 +126,10 @@ type ImageConvertOptions struct {
 	NydusPrefetchPatterns string
 	// NydusCompressor nydus blob compression algorithm, possible values: `none`, `lz4_block`, `zstd`, default is `lz4_block`
 	NydusCompressor string
-	// #endregion
+}
 
-	// #region overlaybd flags
+// OverlaybdOptions contains overlaybd conversion options
+type OverlaybdOptions struct {
 	// Overlaybd convert tar.gz layers to overlaybd layers
 	Overlaybd bool
 	// OverlayFsType filesystem type for overlaybd
@@ -123,7 +137,14 @@ type ImageConvertOptions struct {
 	// OverlaydbDBStr database config string for overlaybd
 	OverlaydbDBStr string
 	// #endregion
+}
 
+type SociConvertOptions struct {
+	// Soci convert image to SOCI format.
+	Soci bool
+	// SociOptions contains SOCI-specific options
+	SociOptions SociOptions
+	// #endregion
 }
 
 // ImageCryptOptions specifies options for `nerdctl image encrypt` and `nerdctl image decrypt`.
@@ -200,7 +221,7 @@ type ImagePullOptions struct {
 	// If nil, it will unpack automatically if only 1 platform is specified.
 	Unpack *bool
 	// Content for specific platforms. Empty if `--all-platforms` is true
-	OCISpecPlatform []v1.Platform
+	OCISpecPlatform []ocispec.Platform
 	// Pull mode
 	Mode string
 	// Suppress verbose output
@@ -289,4 +310,8 @@ type SociOptions struct {
 	SpanSize int64
 	// Minimum layer size to build zTOC for. Smaller layers won't have zTOC and not lazy pulled. Default is 10 MiB.
 	MinLayerSize int64
+	// Platforms convert content for a specific platform
+	Platforms []string
+	// AllPlatforms convert content for all platforms
+	AllPlatforms bool
 }

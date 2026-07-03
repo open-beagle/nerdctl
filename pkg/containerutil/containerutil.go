@@ -42,15 +42,17 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
+	"github.com/containerd/go-cni"
 	"github.com/containerd/log"
 
+	"github.com/containerd/nerdctl/v2/pkg/config"
 	"github.com/containerd/nerdctl/v2/pkg/consoleutil"
 	"github.com/containerd/nerdctl/v2/pkg/errutil"
 	"github.com/containerd/nerdctl/v2/pkg/formatter"
+	"github.com/containerd/nerdctl/v2/pkg/healthcheck"
 	"github.com/containerd/nerdctl/v2/pkg/ipcutil"
 	"github.com/containerd/nerdctl/v2/pkg/labels"
 	"github.com/containerd/nerdctl/v2/pkg/labels/k8slabels"
-	"github.com/containerd/nerdctl/v2/pkg/portutil"
 	"github.com/containerd/nerdctl/v2/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/v2/pkg/signalutil"
 	"github.com/containerd/nerdctl/v2/pkg/strutil"
@@ -59,16 +61,7 @@ import (
 
 // PrintHostPort writes to `writer` the public (HostIP:HostPort) of a given `containerPort/protocol` in a container.
 // if `containerPort < 0`, it writes all public ports of the container.
-func PrintHostPort(ctx context.Context, writer io.Writer, container containerd.Container, containerPort int, proto string) error {
-	l, err := container.Labels(ctx)
-	if err != nil {
-		return err
-	}
-	ports, err := portutil.ParsePortsLabel(l)
-	if err != nil {
-		return err
-	}
-
+func PrintHostPort(ctx context.Context, writer io.Writer, container containerd.Container, containerPort int, proto string, ports []cni.PortMapping) error {
 	if containerPort < 0 {
 		for _, p := range ports {
 			fmt.Fprintf(writer, "%d/%s -> %s:%d\n", p.ContainerPort, p.Protocol, p.HostIP, p.HostPort)
@@ -213,7 +206,7 @@ func GenerateSharingPIDOpts(ctx context.Context, targetCon containerd.Container)
 }
 
 // Start starts `container` with `attach` flag. If `attach` is true, it will attach to the container's stdio.
-func Start(ctx context.Context, container containerd.Container, flagA bool, flagI bool, client *containerd.Client, detachKeys string) (err error) {
+func Start(ctx context.Context, container containerd.Container, isAttach bool, isInteractive bool, client *containerd.Client, detachKeys string, cfg *config.Config) (err error) {
 	// defer the storage of start error in the dedicated label
 	defer func() {
 		if err != nil {
@@ -225,6 +218,9 @@ func Start(ctx context.Context, container containerd.Container, flagA bool, flag
 		return err
 	}
 
+	if _, ok := lab[k8slabels.ContainerType]; ok {
+		log.L.Warnf("nerdctl does not support starting container %s created by Kubernetes", container.ID())
+	}
 	if err := ReconfigNetContainer(ctx, container, client, lab); err != nil {
 		return err
 	}
@@ -241,9 +237,9 @@ func Start(ctx context.Context, container containerd.Container, flagA bool, flag
 	if err != nil {
 		return err
 	}
-	flagT := process.Process.Terminal
+	isTerminal := process.Process.Terminal
 	var con console.Console
-	if (flagI || flagA) && flagT {
+	if (isInteractive || isAttach) && isTerminal {
 		con, err = consoleutil.Current()
 		if err != nil {
 			return err
@@ -279,34 +275,41 @@ func Start(ctx context.Context, container containerd.Container, flagA bool, flag
 	}
 	detachC := make(chan struct{})
 	attachStreamOpt := []string{}
-	if flagA {
-		// In start, flagA attaches only STDOUT/STDERR
+	if isAttach {
+		// In start, isAttach attaches only STDOUT/STDERR
 		// source: https://github.com/containerd/nerdctl/blob/main/docs/command-reference.md#whale-nerdctl-start
 		attachStreamOpt = []string{"STDOUT", "STDERR"}
 	}
-	task, err := taskutil.NewTask(ctx, client, container, attachStreamOpt, flagI, flagT, true, con, logURI, detachKeys, namespace, detachC)
+	task, err := taskutil.NewTask(ctx, client, container, attachStreamOpt, isInteractive, isTerminal, true, con, logURI, detachKeys, namespace, detachC)
 	if err != nil {
 		return err
 	}
-
+	statusC, err := task.Wait(ctx)
+	if err != nil {
+		return err
+	}
 	if err := task.Start(ctx); err != nil {
 		return err
 	}
-	if !flagA {
+
+	// If container has health checks configured, create and start systemd timer/service files.
+	if err := healthcheck.CreateTimer(ctx, container, cfg); err != nil {
+		return fmt.Errorf("failed to create healthcheck timer: %w", err)
+	}
+	if err := healthcheck.StartTimer(ctx, container, cfg); err != nil {
+		return fmt.Errorf("failed to start healthcheck timer: %w", err)
+	}
+
+	if !isAttach {
 		return nil
 	}
-	if flagA && flagT {
+	if isAttach && isTerminal {
 		if err := consoleutil.HandleConsoleResize(ctx, task, con); err != nil {
 			log.G(ctx).WithError(err).Error("console resize")
 		}
 	}
 	sigc := signalutil.ForwardAllSignals(ctx, task)
 	defer signalutil.StopCatch(sigc)
-
-	statusC, err := task.Wait(ctx)
-	if err != nil {
-		return err
-	}
 	select {
 	// io.Wait() would return when either 1) the user detaches from the container OR 2) the container is about to exit.
 	//
@@ -394,6 +397,12 @@ func Stop(ctx context.Context, container containerd.Container, timeout *time.Dur
 
 	switch status.Status {
 	case containerd.Created, containerd.Stopped:
+		// Cleanup the IO after a successful Stop
+		if io := task.IO(); io != nil {
+			if cerr := io.Close(); cerr != nil {
+				log.G(ctx).Warnf("failed to close IO for container %s: %v", container.ID(), cerr)
+			}
+		}
 		return nil
 	case containerd.Paused, containerd.Pausing:
 		paused = true
@@ -406,6 +415,13 @@ func Stop(ctx context.Context, container containerd.Container, timeout *time.Dur
 		return err
 	}
 
+	// signal will be sent once resume is finished
+	if paused {
+		if err := task.Resume(ctx); err != nil {
+			log.G(ctx).Errorf("cannot unpause container %s: %s", container.ID(), err)
+			return err
+		}
+	}
 	if *timeout > 0 {
 		sig, err := getSignal(signalValue, l)
 		if err != nil {
@@ -416,20 +432,10 @@ func Stop(ctx context.Context, container containerd.Container, timeout *time.Dur
 			return err
 		}
 
-		// signal will be sent once resume is finished
-		if paused {
-			if err := task.Resume(ctx); err != nil {
-				log.G(ctx).Warnf("Cannot unpause container %s: %s", container.ID(), err)
-			} else {
-				// no need to do it again when send sigkill signal
-				paused = false
-			}
-		}
-
 		sigtermCtx, sigtermCtxCancel := context.WithTimeout(ctx, *timeout)
 		defer sigtermCtxCancel()
 
-		err = waitContainerStop(sigtermCtx, exitCh, container.ID())
+		err = waitContainerStop(sigtermCtx, task, exitCh, container.ID())
 		if err == nil {
 			return nil
 		}
@@ -448,13 +454,7 @@ func Stop(ctx context.Context, container containerd.Container, timeout *time.Dur
 		return err
 	}
 
-	// signal will be sent once resume is finished
-	if paused {
-		if err := task.Resume(ctx); err != nil {
-			log.G(ctx).Warnf("Cannot unpause container %s: %s", container.ID(), err)
-		}
-	}
-	return waitContainerStop(ctx, exitCh, container.ID())
+	return waitContainerStop(ctx, task, exitCh, container.ID())
 }
 
 func getSignal(signalValue string, containerLabels map[string]string) (syscall.Signal, error) {
@@ -469,7 +469,7 @@ func getSignal(signalValue string, containerLabels map[string]string) (syscall.S
 	return signal.ParseSignal("SIGTERM")
 }
 
-func waitContainerStop(ctx context.Context, exitCh <-chan containerd.ExitStatus, id string) error {
+func waitContainerStop(ctx context.Context, task containerd.Task, exitCh <-chan containerd.ExitStatus, id string) error {
 	select {
 	case <-ctx.Done():
 		if err := ctx.Err(); err != nil {
@@ -477,6 +477,12 @@ func waitContainerStop(ctx context.Context, exitCh <-chan containerd.ExitStatus,
 		}
 		return nil
 	case status := <-exitCh:
+		// Cleanup the IO after a successful Stop
+		if io := task.IO(); io != nil {
+			if cerr := io.Close(); cerr != nil {
+				log.G(ctx).Warnf("failed to close IO for container %s: %v", id, cerr)
+			}
+		}
 		return status.Error()
 	}
 }
@@ -509,7 +515,7 @@ func Pause(ctx context.Context, client *containerd.Client, id string) error {
 }
 
 // Unpause unpauses a container by its id.
-func Unpause(ctx context.Context, client *containerd.Client, id string) error {
+func Unpause(ctx context.Context, client *containerd.Client, id string, cfg *config.Config) error {
 	container, err := client.LoadContainer(ctx, id)
 	if err != nil {
 		return err
@@ -523,6 +529,14 @@ func Unpause(ctx context.Context, client *containerd.Client, id string) error {
 	status, err := task.Status(ctx)
 	if err != nil {
 		return err
+	}
+
+	// Recreate healthcheck related systemd timer/service files.
+	if err := healthcheck.CreateTimer(ctx, container, cfg); err != nil {
+		return fmt.Errorf("failed to create healthcheck timer: %w", err)
+	}
+	if err := healthcheck.StartTimer(ctx, container, cfg); err != nil {
+		return fmt.Errorf("failed to start healthcheck timer: %w", err)
 	}
 
 	switch status.Status {

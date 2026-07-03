@@ -66,14 +66,14 @@ func TestStopStart(t *testing.T) {
 		return nil
 	}
 
-	assert.NilError(t, check(30))
+	assert.NilError(t, check(5))
 	base.Cmd("stop", testContainerName).AssertOK()
 	base.Cmd("exec", testContainerName, "ps").AssertFail()
 	if check(1) == nil {
 		t.Fatal("expected to get an error")
 	}
 	base.Cmd("start", testContainerName).AssertOK()
-	assert.NilError(t, check(30))
+	assert.NilError(t, check(5))
 }
 
 func TestStopWithStopSignal(t *testing.T) {
@@ -198,4 +198,24 @@ func TestStopWithTimeout(t *testing.T) {
 
 	// The container should get the SIGKILL before the 10s default timeout
 	assert.Assert(t, elapsed < 10*time.Second, "Container did not respect --timeout flag")
+}
+func TestStopCleanupFIFOs(t *testing.T) {
+	if rootlessutil.IsRootless() {
+		t.Skip("/run/containerd/fifo/ doesn't exist on rootless")
+	}
+	testutil.DockerIncompatible(t)
+	base := testutil.NewBase(t)
+	testContainerName := testutil.Identifier(t)
+	oldNumFifos, err := countFIFOFiles("/run/containerd/fifo/")
+	assert.NilError(t, err)
+	// Stop the container after 2 seconds
+	go func() {
+		time.Sleep(2 * time.Second)
+		base.Cmd("stop", testContainerName).AssertOK()
+		newNumFifos, err := countFIFOFiles("/run/containerd/fifo/")
+		assert.NilError(t, err)
+		assert.Equal(t, oldNumFifos, newNumFifos)
+	}()
+	// Start a container that is automatically removed after it exits
+	base.Cmd("run", "--rm", "--name", testContainerName, testutil.NginxAlpineImage).AssertOK()
 }

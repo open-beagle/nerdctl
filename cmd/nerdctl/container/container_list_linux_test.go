@@ -27,6 +27,7 @@ import (
 	"gotest.tools/v3/assert"
 
 	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/tig"
 
 	"github.com/containerd/nerdctl/v2/pkg/formatter"
 	"github.com/containerd/nerdctl/v2/pkg/strutil"
@@ -301,6 +302,42 @@ func TestContainerListWithFilter(t *testing.T) {
 			}
 			return nil
 		})
+		return nil
+	})
+
+	// should support regexp
+	base.Cmd("ps", "--filter", "name=.*"+testContainerA.name+".*").AssertOutWithFunc(func(stdout string) error {
+		lines := strings.Split(strings.TrimSpace(stdout), "\n")
+		if len(lines) < 2 {
+			return fmt.Errorf("expected at least 2 lines, got %d", len(lines))
+		}
+
+		tab := tabutil.NewReader("CONTAINER ID\tIMAGE\tCOMMAND\tCREATED\tSTATUS\tPORTS\tNAMES")
+		err := tab.ParseHeader(lines[0])
+		if err != nil {
+			return fmt.Errorf("failed to parse header: %v", err)
+		}
+
+		containerName, _ := tab.ReadRow(lines[1], "NAMES")
+		assert.Equal(t, containerName, testContainerA.name)
+		return nil
+	})
+
+	// fully anchored regexp
+	base.Cmd("ps", "--filter", "name=^"+testContainerA.name+"$").AssertOutWithFunc(func(stdout string) error {
+		lines := strings.Split(strings.TrimSpace(stdout), "\n")
+		if len(lines) < 2 {
+			return fmt.Errorf("expected at least 2 lines, got %d", len(lines))
+		}
+
+		tab := tabutil.NewReader("CONTAINER ID\tIMAGE\tCOMMAND\tCREATED\tSTATUS\tPORTS\tNAMES")
+		err := tab.ParseHeader(lines[0])
+		if err != nil {
+			return fmt.Errorf("failed to parse header: %v", err)
+		}
+
+		containerName, _ := tab.ReadRow(lines[1], "NAMES")
+		assert.Equal(t, containerName, testContainerA.name)
 		return nil
 	})
 
@@ -652,7 +689,7 @@ func TestContainerListStatusFilter(t *testing.T) {
 			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
 				return &test.Expected{
 					ExitCode: 0,
-					Output: func(stdout, info string, t *testing.T) {
+					Output: func(stdout string, t tig.T) {
 						assert.Assert(t, strings.Contains(stdout, data.Labels().Get("cID")), "No container found with status created")
 					},
 				}

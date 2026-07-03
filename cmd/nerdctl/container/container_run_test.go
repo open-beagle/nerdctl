@@ -37,8 +37,10 @@ import (
 	"github.com/containerd/nerdctl/mod/tigron/expect"
 	"github.com/containerd/nerdctl/mod/tigron/require"
 	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/tig"
 
 	"github.com/containerd/nerdctl/v2/cmd/nerdctl/helpers"
+	"github.com/containerd/nerdctl/v2/pkg/rootlessutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
 )
@@ -156,7 +158,7 @@ func TestRunExitCode(t *testing.T) {
 			Output: expect.All(
 				expect.Match(regexp.MustCompile("Exited [(]123[)][A-Za-z0-9 ]+"+data.Identifier("exit123"))),
 				expect.Match(regexp.MustCompile("Exited [(]0[)][A-Za-z0-9 ]+"+data.Identifier("exit0"))),
-				func(stdout, info string, t *testing.T) {
+				func(stdout string, t tig.T) {
 					assert.Equal(t, nerdtest.InspectContainer(helpers, data.Identifier("exit0")).State.Status, "exited")
 					assert.Equal(t, nerdtest.InspectContainer(helpers, data.Identifier("exit123")).State.Status, "exited")
 				},
@@ -836,4 +838,274 @@ func TestRunDomainname(t *testing.T) {
 			).AssertOutContains(tc.expectedOut)
 		})
 	}
+}
+
+func TestRunHealthcheckFlags(t *testing.T) {
+	if rootlessutil.IsRootless() {
+		t.Skip("healthcheck tests are skipped in rootless environment")
+	}
+	testCase := nerdtest.Setup()
+
+	testCases := []struct {
+		name              string
+		args              []string
+		shouldFail        bool
+		expectTest        []string
+		expectRetries     int
+		expectInterval    time.Duration
+		expectTimeout     time.Duration
+		expectStartPeriod time.Duration
+	}{
+		{
+			name: "Valid_full_config",
+			args: []string{
+				"--health-cmd", "curl -f http://localhost || exit 1",
+				"--health-interval", "30s",
+				"--health-timeout", "5s",
+				"--health-retries", "3",
+				"--health-start-period", "2s",
+			},
+			expectTest:        []string{"CMD-SHELL", "curl -f http://localhost || exit 1"},
+			expectInterval:    30 * time.Second,
+			expectTimeout:     5 * time.Second,
+			expectRetries:     3,
+			expectStartPeriod: 2 * time.Second,
+		},
+		{
+			name: "No_healthcheck",
+			args: []string{
+				"--no-healthcheck",
+			},
+			expectTest: []string{"NONE"},
+		},
+		{
+			name:       "No_healthcheck_flag",
+			args:       []string{},
+			expectTest: nil,
+		},
+		{
+			name: "Conflicting_flags",
+			args: []string{
+				"--no-healthcheck", "--health-cmd", "true",
+			},
+			shouldFail: true,
+		},
+		{
+			name: "Negative_retries",
+			args: []string{
+				"--health-cmd", "true",
+				"--health-retries", "-2",
+			},
+			shouldFail: true,
+		},
+		{
+			name: "Negative_timeout",
+			args: []string{
+				"--health-cmd", "true",
+				"--health-timeout", "-5s",
+			},
+			shouldFail: true,
+		},
+		{
+			name: "Invalid_timeout_format",
+			args: []string{
+				"--health-cmd", "true",
+				"--health-timeout", "5blah",
+			},
+			shouldFail: true,
+		},
+		{
+			name: "Health_cmd_cmd_shell",
+			args: []string{
+				"--health-cmd", "curl -f http://localhost || exit 1",
+			},
+			expectTest: []string{"CMD-SHELL", "curl -f http://localhost || exit 1"},
+		},
+		{
+			name: "Health_cmd_array_like",
+			args: []string{
+				"--health-cmd", "echo hello",
+			},
+			expectTest: []string{"CMD-SHELL", "echo hello"},
+		},
+		{
+			name: "Health_cmd_empty",
+			args: []string{
+				"--health-cmd", "",
+				"--health-retries", "2",
+			},
+			expectTest:    nil,
+			expectRetries: 2,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+
+		testCase.SubTests = append(testCase.SubTests, &test.Case{
+			Description: tc.name,
+			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+				args := append([]string{"run", "-d", "--name", tc.name}, tc.args...)
+				args = append(args, testutil.CommonImage, "sleep", "infinity")
+				return helpers.Command(args...)
+			},
+			Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+				if tc.shouldFail {
+					return &test.Expected{
+						ExitCode: expect.ExitCodeGenericFail,
+					}
+				}
+				return &test.Expected{
+					ExitCode: expect.ExitCodeSuccess,
+					Output: expect.All(
+						func(stdout string, t tig.T) {
+							inspect := nerdtest.InspectContainer(helpers, tc.name)
+							hc := inspect.Config.Healthcheck
+							if tc.expectTest == nil {
+								assert.Assert(t, hc == nil || len(hc.Test) == 0)
+							} else {
+								assert.Assert(t, hc != nil)
+								assert.DeepEqual(t, hc.Test, tc.expectTest)
+							}
+							if tc.expectRetries > 0 {
+								assert.Equal(t, hc.Retries, tc.expectRetries)
+							}
+							if tc.expectTimeout > 0 {
+								assert.Equal(t, hc.Timeout, tc.expectTimeout)
+							}
+							if tc.expectInterval > 0 {
+								assert.Equal(t, hc.Interval, tc.expectInterval)
+							}
+							if tc.expectStartPeriod > 0 {
+								assert.Equal(t, hc.StartPeriod, tc.expectStartPeriod)
+							}
+						},
+					),
+				}
+			},
+			Cleanup: func(data test.Data, helpers test.Helpers) {
+				helpers.Anyhow("rm", "-f", tc.name)
+			},
+		})
+	}
+
+	testCase.Run(t)
+}
+
+func TestRunHealthcheckFromImage(t *testing.T) {
+	if rootlessutil.IsRootless() {
+		t.Skip("healthcheck tests are skipped in rootless environment")
+	}
+	nerdtest.Setup()
+
+	dockerfile := fmt.Sprintf(`FROM %s
+HEALTHCHECK --interval=30s --timeout=10s CMD wget -q --spider http://localhost:8080 || exit 1
+	`, testutil.CommonImage)
+
+	testCase := &test.Case{
+		Require: nerdtest.Build,
+		Setup: func(data test.Data, helpers test.Helpers) {
+			data.Temp().Save(dockerfile, "Dockerfile")
+			data.Labels().Set("image", data.Identifier())
+			helpers.Ensure("build", "-t", data.Labels().Get("image"), data.Temp().Path())
+		},
+		SubTests: []*test.Case{
+			{
+				Description: "merge_with_image",
+				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+					return helpers.Command("run", "-d", "--name", data.Identifier(),
+						"--health-retries=5",
+						"--health-interval=45s",
+						data.Labels().Get("image"))
+				},
+				Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+					return &test.Expected{
+						ExitCode: expect.ExitCodeSuccess,
+						Output: expect.All(func(stdout string, t tig.T) {
+							inspect := nerdtest.InspectContainer(helpers, data.Identifier())
+							hc := inspect.Config.Healthcheck
+							assert.Assert(t, hc != nil, "expected healthcheck config to be present")
+							assert.DeepEqual(t, hc.Test, []string{"CMD-SHELL", "wget -q --spider http://localhost:8080 || exit 1"})
+							assert.Equal(t, 5, hc.Retries)               // From CLI flags
+							assert.Equal(t, 45*time.Second, hc.Interval) // From CLI flags
+							assert.Equal(t, 10*time.Second, hc.Timeout)  // From Dockerfile
+						}),
+					}
+				},
+				Cleanup: func(data test.Data, helpers test.Helpers) {
+					helpers.Anyhow("rm", "-f", data.Identifier())
+				},
+			},
+			{
+				Description: "Disable image health checks via runtime flag",
+				Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+					return helpers.Command(
+						"run", "-d", "--name", data.Identifier(),
+						"--no-healthcheck",
+						data.Labels().Get("image"),
+					)
+				},
+				Expected: func(data test.Data, helpers test.Helpers) *test.Expected {
+					return &test.Expected{
+						ExitCode: expect.ExitCodeSuccess,
+						Output: expect.All(func(stdout string, t tig.T) {
+							inspect := nerdtest.InspectContainer(helpers, data.Identifier())
+							hc := inspect.Config.Healthcheck
+							assert.Assert(t, hc != nil, "expected healthcheck config to be present")
+							assert.DeepEqual(t, hc.Test, []string{"NONE"})
+						}),
+					}
+				},
+				Cleanup: func(data test.Data, helpers test.Helpers) {
+					helpers.Anyhow("rm", "-f", data.Identifier())
+				},
+			},
+		},
+	}
+
+	testCase.Run(t)
+}
+
+func countFIFOFiles(root string) (int, error) {
+	count := 0
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeNamedPipe != 0 {
+			count++
+		}
+		return nil
+	})
+	return count, err
+}
+func TestCleanupFIFOs(t *testing.T) {
+	if rootlessutil.IsRootless() {
+		t.Skip("/run/containerd/fifo/ doesn't exist on rootless")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("test is not compatible with windows")
+	}
+	testutil.DockerIncompatible(t)
+	testCase := nerdtest.Setup()
+	testCase.NoParallel = true
+	testCase.Setup = func(data test.Data, helpers test.Helpers) {
+		cmd := helpers.Command("run", "-it", "--rm", testutil.CommonImage, "date")
+		cmd.WithPseudoTTY()
+		cmd.Run(&test.Expected{
+			ExitCode: 0,
+		})
+		oldNumFifos, err := countFIFOFiles("/run/containerd/fifo/")
+		assert.NilError(t, err)
+
+		cmd = helpers.Command("run", "-it", "--rm", testutil.CommonImage, "date")
+		cmd.WithPseudoTTY()
+		cmd.Run(&test.Expected{
+			ExitCode: 0,
+		})
+		newNumFifos, err := countFIFOFiles("/run/containerd/fifo/")
+		assert.NilError(t, err)
+		assert.Equal(t, oldNumFifos, newNumFifos)
+	}
+	testCase.Run(t)
 }

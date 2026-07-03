@@ -20,10 +20,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
 	"gotest.tools/v3/assert"
 
 	"github.com/containerd/containerd/v2/defaults"
@@ -32,8 +33,12 @@ import (
 
 	"github.com/containerd/nerdctl/v2/pkg/buildkitutil"
 	"github.com/containerd/nerdctl/v2/pkg/clientutil"
+	ncdefaults "github.com/containerd/nerdctl/v2/pkg/defaults"
+	"github.com/containerd/nerdctl/v2/pkg/infoutil"
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/dockercompat"
+	"github.com/containerd/nerdctl/v2/pkg/netutil"
 	"github.com/containerd/nerdctl/v2/pkg/rootlessutil"
+	"github.com/containerd/nerdctl/v2/pkg/snapshotterutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest/platform"
 )
@@ -156,8 +161,44 @@ var Rootless = &test.Requirement{
 	},
 }
 
+// RootlessWithDetachNetNS marks a test as suitable only for rootless environment with detached netns support.
+var RootlessWithDetachNetNS = &test.Requirement{
+	Check: func(data test.Data, helpers test.Helpers) (ret bool, mess string) {
+		ns, err := rootlessutil.DetachedNetNS()
+		if err != nil {
+			return false, fmt.Sprintf("failed to check for detached netns: %+v", err)
+		}
+		if ns == "" {
+			return false, "detached netns is not supported"
+		}
+		return true, "detached netns is supported"
+	},
+}
+
+// RootlessWithoutDetachNetNS marks a test as suitable only for rootless environment without detached netns support.
+// i.e., RootlessKit v1.
+var RootlessWithoutDetachNetNS = require.All(Rootless, require.Not(RootlessWithDetachNetNS))
+
 // Rootful marks a test as suitable only for rootful env
 var Rootful = require.Not(Rootless)
+
+// Info requires that `nerdctl info` satisfies the condition function passed as argument.
+func Info(f func(dockercompat.Info) error) *test.Requirement {
+	return &test.Requirement{
+		Check: func(data test.Data, helpers test.Helpers) (ret bool, mess string) {
+			stdout := helpers.Capture("info", "--format", "{{ json . }}")
+			var dinf dockercompat.Info
+			err := json.Unmarshal([]byte(stdout), &dinf)
+			if err != nil {
+				return false, fmt.Sprintf("failed to parse docker info: %v", err)
+			}
+			if err := f(dinf); err != nil {
+				return false, err.Error()
+			}
+			return true, ""
+		},
+	}
+}
 
 // CGroup requires that cgroup is enabled
 var CGroup = &test.Requirement{
@@ -275,13 +316,6 @@ var Registry = require.All(
 				// - when we start a large number of registries in subtests, no need to round-trip to ghcr everytime
 				// This of course assumes that the subtests are NOT going to prune / rmi images
 				registryImage := platform.RegistryImageStable
-				up := os.Getenv("DISTRIBUTION_VERSION")
-				if up != "" {
-					if up[0:1] != "v" {
-						up = "v" + up
-					}
-					registryImage = platform.RegistryImageNext + up
-				}
 				helpers.Ensure("pull", "--quiet", registryImage)
 				helpers.Ensure("pull", "--quiet", platform.DockerAuthImage)
 				helpers.Ensure("pull", "--quiet", platform.KuboImage)
@@ -415,4 +449,60 @@ var RemapIDs = &test.Requirement{
 		}
 		return false, "snapshotter does not support ID remapping"
 	},
+}
+
+// SociVersion returns a requirement that checks if the installed SOCI version
+// meets the minimum required version
+func SociVersion(minVersion string) *test.Requirement {
+	return &test.Requirement{
+		Check: func(data test.Data, helpers test.Helpers) (bool, string) {
+			// Use the common CheckSociVersion function from snapshotterutil
+			err := snapshotterutil.CheckSociVersion(minVersion)
+			if err != nil {
+				return false, err.Error()
+			}
+			return true, fmt.Sprintf("soci version meets minimum requirement %s", minVersion)
+		},
+	}
+}
+
+func ContainerdVersion(v string) *test.Requirement {
+	return &test.Requirement{
+		Check: func(data test.Data, helpers test.Helpers) (bool, string) {
+			ctx := context.Background()
+			namespace := defaultNamespace
+			address := defaults.DefaultAddress
+			client, ctx, cancel, err := clientutil.NewClient(ctx, namespace, address)
+			if err != nil {
+				return false, fmt.Sprintf("failed to create client: %v", err)
+			}
+			defer cancel()
+			if sv, err := infoutil.ServerSemVer(ctx, client); err != nil {
+				return false, err.Error()
+			} else if sv.LessThan(semver.MustParse(v)) {
+				return false, fmt.Sprintf("`nerdctl commit --compression expects containerd %s or later, got containerd %v", v, sv)
+			}
+			return true, ""
+		},
+	}
+}
+
+// CNIFirewallVersion checks if the CNI firewall plugin version is greater than or equal to the specified version
+func CNIFirewallVersion(requiredVersion string) *test.Requirement {
+	return &test.Requirement{
+		Check: func(data test.Data, helpers test.Helpers) (bool, string) {
+			cniPath := ncdefaults.CNIPath()
+			firewallPath := filepath.Join(cniPath, "firewall")
+			ok, err := netutil.FirewallPluginGEQVersion(firewallPath, requiredVersion)
+			if err != nil {
+				return false, fmt.Sprintf("Failed to check CNI firewall version: %v", err)
+			}
+
+			if !ok {
+				return false, fmt.Sprintf("CNI firewall plugin version is less than required version %s", requiredVersion)
+			}
+
+			return true, fmt.Sprintf("CNI firewall plugin version is greater than or equal to required version %s", requiredVersion)
+		},
+	}
 }

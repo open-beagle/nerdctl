@@ -21,8 +21,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,9 +35,11 @@ import (
 	"github.com/containerd/nerdctl/mod/tigron/expect"
 	"github.com/containerd/nerdctl/mod/tigron/require"
 	"github.com/containerd/nerdctl/mod/tigron/test"
+	"github.com/containerd/nerdctl/mod/tigron/tig"
 
 	"github.com/containerd/nerdctl/v2/pkg/cmd/container"
 	"github.com/containerd/nerdctl/v2/pkg/idutil/containerwalker"
+	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/dockercompat"
 	"github.com/containerd/nerdctl/v2/pkg/testutil"
 	"github.com/containerd/nerdctl/v2/pkg/testutil/nerdtest"
 )
@@ -60,9 +62,6 @@ func TestRunCgroupV2(t *testing.T) {
 	if !info.SwapLimit {
 		t.Skip("test requires SwapLimit")
 	}
-	if !info.CPUShares {
-		t.Skip("test requires CPUShares")
-	}
 	if !info.CPUSet {
 		t.Skip("test requires CPUSet")
 	}
@@ -73,7 +72,6 @@ func TestRunCgroupV2(t *testing.T) {
 44040192
 44040192
 42
-77
 0-1
 0
 `
@@ -82,34 +80,32 @@ func TestRunCgroupV2(t *testing.T) {
 60817408
 6291456
 42
-77
 0-1
 0
 `
 
-	// In CgroupV2 CPUWeight replace CPUShares => weight := 1 + ((shares-2)*9999)/262142
 	base.Cmd("run", "--rm",
 		"--cpus", "0.42", "--cpuset-mems", "0",
 		"--memory", "42m",
 		"--pids-limit", "42",
-		"--cpu-shares", "2000", "--cpuset-cpus", "0-1",
+		"--cpuset-cpus", "0-1",
 		"-w", "/sys/fs/cgroup", testutil.AlpineImage,
 		"cat", "cpu.max", "memory.max", "memory.swap.max",
-		"pids.max", "cpu.weight", "cpuset.cpus", "cpuset.mems").AssertOutExactly(expected1)
+		"pids.max", "cpuset.cpus", "cpuset.mems").AssertOutExactly(expected1)
 	base.Cmd("run", "--rm",
 		"--cpu-quota", "42000", "--cpuset-mems", "0",
 		"--cpu-period", "100000", "--memory", "42m", "--memory-reservation", "6m", "--memory-swap", "100m",
-		"--pids-limit", "42", "--cpu-shares", "2000", "--cpuset-cpus", "0-1",
+		"--pids-limit", "42", "--cpuset-cpus", "0-1",
 		"-w", "/sys/fs/cgroup", testutil.AlpineImage,
 		"cat", "cpu.max", "memory.max", "memory.swap.max", "memory.low", "pids.max",
-		"cpu.weight", "cpuset.cpus", "cpuset.mems").AssertOutExactly(expected2)
+		"cpuset.cpus", "cpuset.mems").AssertOutExactly(expected2)
 
 	base.Cmd("run", "--name", testutil.Identifier(t)+"-testUpdate1", "-w", "/sys/fs/cgroup", "-d",
 		testutil.AlpineImage, "sleep", nerdtest.Infinity).AssertOK()
 	defer base.Cmd("rm", "-f", testutil.Identifier(t)+"-testUpdate1").Run()
 	update := []string{"update", "--cpu-quota", "42000", "--cpuset-mems", "0", "--cpu-period", "100000",
 		"--memory", "42m",
-		"--pids-limit", "42", "--cpu-shares", "2000", "--cpuset-cpus", "0-1"}
+		"--pids-limit", "42", "--cpuset-cpus", "0-1"}
 	if nerdtest.IsDocker() && info.CgroupVersion == "2" && info.SwapLimit {
 		// Workaround for Docker with cgroup v2:
 		// > Error response from daemon: Cannot update container 67c13276a13dd6a091cdfdebb355aa4e1ecb15fbf39c2b5c9abee89053e88fce:
@@ -120,7 +116,7 @@ func TestRunCgroupV2(t *testing.T) {
 	base.Cmd(update...).AssertOK()
 	base.Cmd("exec", testutil.Identifier(t)+"-testUpdate1",
 		"cat", "cpu.max", "memory.max", "memory.swap.max",
-		"pids.max", "cpu.weight", "cpuset.cpus", "cpuset.mems").AssertOutExactly(expected1)
+		"pids.max", "cpuset.cpus", "cpuset.mems").AssertOutExactly(expected1)
 
 	defer base.Cmd("rm", "-f", testutil.Identifier(t)+"-testUpdate2").Run()
 	base.Cmd("run", "--name", testutil.Identifier(t)+"-testUpdate2", "-w", "/sys/fs/cgroup", "-d",
@@ -129,11 +125,11 @@ func TestRunCgroupV2(t *testing.T) {
 
 	base.Cmd("update", "--cpu-quota", "42000", "--cpuset-mems", "0", "--cpu-period", "100000",
 		"--memory", "42m", "--memory-reservation", "6m", "--memory-swap", "100m",
-		"--pids-limit", "42", "--cpu-shares", "2000", "--cpuset-cpus", "0-1",
+		"--pids-limit", "42", "--cpuset-cpus", "0-1",
 		testutil.Identifier(t)+"-testUpdate2").AssertOK()
 	base.Cmd("exec", testutil.Identifier(t)+"-testUpdate2",
 		"cat", "cpu.max", "memory.max", "memory.swap.max", "memory.low",
-		"pids.max", "cpu.weight", "cpuset.cpus", "cpuset.mems").AssertOutExactly(expected2)
+		"pids.max", "cpuset.cpus", "cpuset.mems").AssertOutExactly(expected2)
 	base.Cmd("run", "--rm", "--security-opt", "writable-cgroups=true", testutil.AlpineImage, "mkdir", "/sys/fs/cgroup/foo").AssertOK()
 	base.Cmd("run", "--rm", "--security-opt", "writable-cgroups=false", testutil.AlpineImage, "mkdir", "/sys/fs/cgroup/foo").AssertFail()
 	base.Cmd("run", "--rm", testutil.AlpineImage, "mkdir", "/sys/fs/cgroup/foo").AssertFail()
@@ -315,7 +311,7 @@ func TestRunDevice(t *testing.T) {
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("exec", data.Labels().Get("id"), "sh", "-ec", "echo -n \"overwritten-lo1-content\">"+lo[1].Device)
 			},
-			Expected: test.Expects(expect.ExitCodeSuccess, nil, func(stdout string, info string, t *testing.T) {
+			Expected: test.Expects(expect.ExitCodeSuccess, nil, func(stdout string, t tig.T) {
 				lo1Read, err := os.ReadFile(lo[1].Device)
 				assert.NilError(t, err)
 				assert.Equal(t, string(bytes.Trim(lo1Read, "\x00")), "overwritten-lo1-content")
@@ -494,31 +490,33 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 	// For now, disable the test unless on a recent kernel.
 	testutil.RequireKernelVersion(t, ">= 6.0.0-0")
 
-	// Create dummy device path
-	dummyDev := "/dev/dummy-zero"
-
+	const (
+		weight       = "150"
+		deviceWeight = "100"
+		readBps      = "1048576"
+		readIops     = "1000"
+		writeBps     = "2097152"
+		writeIops    = "2000"
+	)
+	var lo *loopback.Loopback
 	testCase.Setup = func(data test.Data, helpers test.Helpers) {
-		// Create dummy device
-		helperCmd := exec.Command("mknod", dummyDev, "c", "1", "5")
-		if out, err := helperCmd.CombinedOutput(); err != nil {
-			t.Fatalf("cannot create %q: %q: %v", dummyDev, string(out), err)
-		}
+		var err error
+		lo, err = loopback.New(4096)
+		assert.NilError(t, err)
+		t.Logf("loopback device: %+v", lo)
 	}
-
 	testCase.Cleanup = func(data test.Data, helpers test.Helpers) {
-		// Clean up the dummy device
-		if err := exec.Command("rm", "-f", dummyDev).Run(); err != nil {
-			t.Logf("failed to remove device %s: %v", dummyDev, err)
+		if lo != nil {
+			_ = lo.Close()
 		}
 	}
-
 	testCase.SubTests = []*test.Case{
 		{
 			Description: "blkio-weight",
 			Require:     nerdtest.CGroupV2,
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("run", "-d", "--name", data.Identifier(),
-					"--blkio-weight", "150",
+					"--blkio-weight", weight,
 					testutil.AlpineImage, "sleep", "infinity")
 			},
 			Cleanup: func(data test.Data, helpers test.Helpers) {
@@ -528,8 +526,8 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 				return &test.Expected{
 					ExitCode: 0,
 					Output: expect.All(
-						func(stdout string, info string, t *testing.T) {
-							assert.Assert(t, strings.Contains(helpers.Capture("inspect", "--format", "{{.HostConfig.BlkioWeight}}", data.Identifier()), "150"))
+						func(stdout string, t tig.T) {
+							assert.Assert(t, strings.Contains(helpers.Capture("inspect", "--format", "{{.HostConfig.BlkioWeight}}", data.Identifier()), weight))
 						},
 					),
 				}
@@ -540,7 +538,7 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 			Require:     nerdtest.CGroupV2,
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("run", "-d", "--name", data.Identifier(),
-					"--blkio-weight-device", dummyDev+":100",
+					"--blkio-weight-device", fmt.Sprintf("%s:%s", lo.Device, deviceWeight),
 					testutil.AlpineImage, "sleep", "infinity")
 			},
 			Cleanup: func(data test.Data, helpers test.Helpers) {
@@ -550,9 +548,13 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 				return &test.Expected{
 					ExitCode: 0,
 					Output: expect.All(
-						func(stdout string, info string, t *testing.T) {
+						func(stdout string, t tig.T) {
 							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioWeightDevice}}{{.Weight}}{{end}}", data.Identifier())
-							assert.Assert(t, strings.Contains(inspectOut, "100"))
+							assert.Assert(t, strings.Contains(inspectOut, deviceWeight))
+						},
+						func(stdout string, t tig.T) {
+							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioWeightDevice}}{{.Path}}{{end}}", data.Identifier())
+							assert.Assert(t, strings.Contains(inspectOut, lo.Device))
 						},
 					),
 				}
@@ -569,7 +571,7 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 			),
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("run", "-d", "--name", data.Identifier(),
-					"--device-read-bps", dummyDev+":1048576",
+					"--device-read-bps", fmt.Sprintf("%s:%s", lo.Device, readBps),
 					testutil.AlpineImage, "sleep", "infinity")
 			},
 			Cleanup: func(data test.Data, helpers test.Helpers) {
@@ -579,9 +581,13 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 				return &test.Expected{
 					ExitCode: 0,
 					Output: expect.All(
-						func(stdout string, info string, t *testing.T) {
+						func(stdout string, t tig.T) {
 							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceReadBps}}{{.Rate}}{{end}}", data.Identifier())
-							assert.Assert(t, strings.Contains(inspectOut, "1048576"))
+							assert.Assert(t, strings.Contains(inspectOut, readBps))
+						},
+						func(stdout string, t tig.T) {
+							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceReadBps}}{{.Path}}{{end}}", data.Identifier())
+							assert.Assert(t, strings.Contains(inspectOut, lo.Device))
 						},
 					),
 				}
@@ -598,7 +604,7 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 			),
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("run", "-d", "--name", data.Identifier(),
-					"--device-write-bps", dummyDev+":2097152",
+					"--device-write-bps", fmt.Sprintf("%s:%s", lo.Device, writeBps),
 					testutil.AlpineImage, "sleep", "infinity")
 			},
 			Cleanup: func(data test.Data, helpers test.Helpers) {
@@ -608,9 +614,13 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 				return &test.Expected{
 					ExitCode: 0,
 					Output: expect.All(
-						func(stdout string, info string, t *testing.T) {
+						func(stdout string, t tig.T) {
 							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceWriteBps}}{{.Rate}}{{end}}", data.Identifier())
-							assert.Assert(t, strings.Contains(inspectOut, "2097152"))
+							assert.Assert(t, strings.Contains(inspectOut, writeBps))
+						},
+						func(stdout string, t tig.T) {
+							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceWriteBps}}{{.Path}}{{end}}", data.Identifier())
+							assert.Assert(t, strings.Contains(inspectOut, lo.Device))
 						},
 					),
 				}
@@ -627,7 +637,7 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 			),
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("run", "-d", "--name", data.Identifier(),
-					"--device-read-iops", dummyDev+":1000",
+					"--device-read-iops", fmt.Sprintf("%s:%s", lo.Device, readIops),
 					testutil.AlpineImage, "sleep", "infinity")
 			},
 			Cleanup: func(data test.Data, helpers test.Helpers) {
@@ -637,9 +647,13 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 				return &test.Expected{
 					ExitCode: 0,
 					Output: expect.All(
-						func(stdout string, info string, t *testing.T) {
+						func(stdout string, t tig.T) {
 							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceReadIOps}}{{.Rate}}{{end}}", data.Identifier())
-							assert.Assert(t, strings.Contains(inspectOut, "1000"))
+							assert.Assert(t, strings.Contains(inspectOut, readIops))
+						},
+						func(stdout string, t tig.T) {
+							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceReadIOps}}{{.Path}}{{end}}", data.Identifier())
+							assert.Assert(t, strings.Contains(inspectOut, lo.Device))
 						},
 					),
 				}
@@ -656,7 +670,7 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 			),
 			Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
 				return helpers.Command("run", "-d", "--name", data.Identifier(),
-					"--device-write-iops", dummyDev+":2000",
+					"--device-write-iops", fmt.Sprintf("%s:%s", lo.Device, writeIops),
 					testutil.AlpineImage, "sleep", "infinity")
 			},
 			Cleanup: func(data test.Data, helpers test.Helpers) {
@@ -666,9 +680,13 @@ func TestRunBlkioSettingCgroupV2(t *testing.T) {
 				return &test.Expected{
 					ExitCode: 0,
 					Output: expect.All(
-						func(stdout string, info string, t *testing.T) {
+						func(stdout string, t tig.T) {
 							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceWriteIOps}}{{.Rate}}{{end}}", data.Identifier())
-							assert.Assert(t, strings.Contains(inspectOut, "2000"))
+							assert.Assert(t, strings.Contains(inspectOut, writeIops))
+						},
+						func(stdout string, t tig.T) {
+							inspectOut := helpers.Capture("inspect", "--format", "{{range .HostConfig.BlkioDeviceWriteIOps}}{{.Path}}{{end}}", data.Identifier())
+							assert.Assert(t, strings.Contains(inspectOut, lo.Device))
 						},
 					),
 				}
@@ -701,7 +719,7 @@ func TestRunCPURealTimeSettingCgroupV1(t *testing.T) {
 			return &test.Expected{
 				ExitCode: 0,
 				Output: expect.All(
-					func(stdout string, info string, t *testing.T) {
+					func(stdout string, t tig.T) {
 						rtRuntime := helpers.Capture("inspect", "--format", "{{.HostConfig.CPURealtimeRuntime}}", data.Identifier())
 						rtPeriod := helpers.Capture("inspect", "--format", "{{.HostConfig.CPURealtimePeriod}}", data.Identifier())
 						assert.Assert(t, strings.Contains(rtRuntime, "950000"))
@@ -710,6 +728,33 @@ func TestRunCPURealTimeSettingCgroupV1(t *testing.T) {
 				),
 			}
 		},
+	}
+
+	testCase.Run(t)
+}
+
+func TestRunCPUSharesCgroupV2(t *testing.T) {
+	nerdtest.Setup()
+
+	testCase := &test.Case{
+		Require: require.All(
+			nerdtest.CGroupV2,
+			nerdtest.Info(
+				func(info dockercompat.Info) error {
+					if !info.CPUShares {
+						return fmt.Errorf("test requires CPUShares")
+					}
+					return nil
+				},
+			),
+		),
+		Command: func(data test.Data, helpers test.Helpers) test.TestableCommand {
+			return helpers.Command("run", "--rm", "--cpu-shares", "2000",
+				testutil.AlpineImage, "cat", "/sys/fs/cgroup/cpu.weight")
+		},
+		// The value was historically 77, but with runc v1.4.0-rc.1 it became 170.
+		// https://github.com/opencontainers/runc/issues/4896#issuecomment-3301825811
+		Expected: test.Expects(0, nil, expect.Match(regexp.MustCompile("^(77|170)\n$"))),
 	}
 
 	testCase.Run(t)

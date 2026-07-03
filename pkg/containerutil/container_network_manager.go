@@ -39,6 +39,7 @@ import (
 	"github.com/containerd/nerdctl/v2/pkg/clientutil"
 	"github.com/containerd/nerdctl/v2/pkg/dnsutil/hostsstore"
 	"github.com/containerd/nerdctl/v2/pkg/idutil/containerwalker"
+	"github.com/containerd/nerdctl/v2/pkg/internal/filesystem"
 	"github.com/containerd/nerdctl/v2/pkg/labels"
 	"github.com/containerd/nerdctl/v2/pkg/mountutil"
 	"github.com/containerd/nerdctl/v2/pkg/netutil"
@@ -685,7 +686,7 @@ func (m *hostNetworkManager) ContainerNetworkingOpts(_ context.Context, containe
 		return nil, nil, err
 	}
 
-	content, err := os.ReadFile("/etc/hosts")
+	content, err := filesystem.ReadFile("/etc/hosts")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -829,7 +830,7 @@ func writeEtcHostnameForContainer(globalOptions types.GlobalCommandOptions, host
 	}
 
 	hostnamePath := filepath.Join(stateDir, "hostname")
-	if err := os.WriteFile(hostnamePath, []byte(hostname+"\n"), 0644); err != nil {
+	if err := filesystem.WriteFile(hostnamePath, []byte(hostname+"\n"), 0644); err != nil {
 		return nil, err
 	}
 
@@ -891,12 +892,6 @@ func NetworkOptionsFromSpec(spec *specs.Spec) (types.NetworkOptions, error) {
 		return opts, err
 	}
 	opts.NetworkSlice = networks
-
-	if portsJSON := spec.Annotations[labels.Ports]; portsJSON != "" {
-		if err := json.Unmarshal([]byte(portsJSON), &opts.PortMappings); err != nil {
-			return opts, err
-		}
-	}
 
 	return opts, nil
 }

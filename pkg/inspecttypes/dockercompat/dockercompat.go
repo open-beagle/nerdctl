@@ -44,6 +44,7 @@ import (
 	"github.com/containerd/go-cni"
 	"github.com/containerd/log"
 
+	"github.com/containerd/nerdctl/v2/pkg/healthcheck"
 	"github.com/containerd/nerdctl/v2/pkg/imgutil"
 	"github.com/containerd/nerdctl/v2/pkg/inspecttypes/native"
 	"github.com/containerd/nerdctl/v2/pkg/ipcutil"
@@ -181,7 +182,7 @@ type HostConfig struct {
 	MemorySwap         int64             // Total memory usage (memory + swap); set `-1` to enable unlimited swap
 	OomKillDisable     bool              // specifies whether to disable OOM Killer
 	Devices            []DeviceMapping   // List of devices to map inside the container
-	LinuxBlkioSettings
+	BlkioSettings
 }
 
 // From https://github.com/moby/moby/blob/v20.10.1/api/types/types.go#L416-L427
@@ -210,11 +211,11 @@ type Config struct {
 	// TODO: Tty          bool        // Attach standard streams to a tty, including stdin if it is not closed.
 	// TODO: OpenStdin    bool        // Open stdin
 	// TODO: StdinOnce    bool        // If true, close stdin after the 1 attached client disconnects.
-	Env []string `json:",omitempty"` // List of environment variable to set in the container
-	Cmd []string `json:",omitempty"` // Command to run when starting the container
-	// TODO Healthcheck     *HealthConfig       `json:",omitempty"` // Healthcheck describes how to check the container is healthy
+	Env         []string                 `json:",omitempty"` // List of environment variable to set in the container
+	Cmd         []string                 `json:",omitempty"` // Command to run when starting the container
+	Healthcheck *healthcheck.Healthcheck `json:",omitempty"` // Healthcheck describes how to check the container is healthy
 	// TODO: ArgsEscaped     bool                `json:",omitempty"` // True if command is already escaped (meaning treat as a command line) (Windows specific).
-	// TODO: Image           string              // Name of the image as it was passed by the operator (e.g. could be symbolic)
+	Image      string              `json:",omitempty"` // Name of the image as it was passed by the operator (e.g. could be symbolic)
 	Volumes    map[string]struct{} `json:",omitempty"` // List of volumes (mounts) used for the container
 	WorkingDir string              `json:",omitempty"` // Current directory (PWD) in the command will be launched
 	Entrypoint []string            `json:",omitempty"` // Entrypoint to run when starting the container
@@ -240,7 +241,7 @@ type ContainerState struct {
 	Error      string
 	StartedAt  string
 	FinishedAt string
-	// TODO: Health     *Health `json:",omitempty"`
+	Health     *healthcheck.Health `json:",omitempty"`
 }
 
 type NetworkSettings struct {
@@ -306,15 +307,6 @@ type NetworkEndpointSettings struct {
 	GlobalIPv6PrefixLen int
 	MacAddress          string
 	// TODO DriverOpts          map[string]string
-}
-
-type LinuxBlkioSettings struct {
-	BlkioWeight          uint16 // Block IO weight (relative weight vs. other containers)
-	BlkioWeightDevice    []*specs.LinuxWeightDevice
-	BlkioDeviceReadBps   []*specs.LinuxThrottleDevice
-	BlkioDeviceWriteBps  []*specs.LinuxThrottleDevice
-	BlkioDeviceReadIOps  []*specs.LinuxThrottleDevice
-	BlkioDeviceWriteIOps []*specs.LinuxThrottleDevice
 }
 
 // ContainerFromNative instantiates a Docker-compatible Container from containerd-native Container.
@@ -548,6 +540,7 @@ func ContainerFromNative(n *native.Container) (*Container, error) {
 	c.State = cs
 	c.Config = &Config{
 		Labels: n.Labels,
+		Image:  c.Image,
 	}
 	if n.Labels[labels.Hostname] != "" {
 		hostname = n.Labels[labels.Hostname]
@@ -578,6 +571,26 @@ func ContainerFromNative(n *native.Container) (*Container, error) {
 
 	if n.Labels[labels.User] != "" {
 		c.Config.User = n.Labels[labels.User]
+	}
+
+	// Add health check config if present in labels
+	if hConfig, ok := n.Labels[labels.HealthCheck]; ok && hConfig != "" {
+		healthCheckConfig, err := healthcheck.HealthCheckFromJSON(hConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse healthcheck label: %w", err)
+		}
+		c.Config.Healthcheck = healthCheckConfig
+	}
+
+	// Add health status to container state.
+	if healthState, ok := n.Labels[labels.HealthState]; ok && healthState != "" {
+		healthStatus, err := healthcheck.ReadHealthStatusForInspect(n.Labels[labels.StateDir], n.Labels[labels.HealthState])
+		if err != nil {
+			return nil, fmt.Errorf("failed to get health status for inspect: %w", err)
+		}
+		if healthStatus != nil {
+			c.State.Health = healthStatus
+		}
 	}
 
 	return c, nil
@@ -627,6 +640,16 @@ func ImageFromNative(nativeImage *native.Image) (*Image, error) {
 		Entrypoint:   imgOCI.Config.Entrypoint,
 		Labels:       imgOCI.Config.Labels,
 		ExposedPorts: portSet,
+		Image:        nativeImage.Image.Name,
+	}
+
+	// Add health check if present in labels
+	if healthStr, ok := imgOCI.Config.Labels[labels.HealthCheck]; ok && healthStr != "" {
+		healthCheckConfig, err := healthcheck.HealthCheckFromJSON(healthStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse healthcheck label: %w", err)
+		}
+		image.Config.Healthcheck = healthCheckConfig
 	}
 
 	return image, nil
@@ -664,7 +687,7 @@ func statusFromNative(x containerd.Status, labels map[string]string) string {
 	}
 }
 
-func networkSettingsFromNative(n *native.NetNS, sp *specs.Spec) (*NetworkSettings, error) {
+func networkSettingsFromNative(n *native.NetNS, _ *specs.Spec) (*NetworkSettings, error) {
 	res := &NetworkSettings{
 		Networks: make(map[string]*NetworkEndpointSettings),
 	}
@@ -707,19 +730,12 @@ func networkSettingsFromNative(n *native.NetNS, sp *specs.Spec) (*NetworkSetting
 		fakeDockerNetworkName := fmt.Sprintf("unknown-%s", x.Name)
 		res.Networks[fakeDockerNetworkName] = nes
 
-		if portsLabel, ok := sp.Annotations[labels.Ports]; ok {
-			var ports []cni.PortMapping
-			err := json.Unmarshal([]byte(portsLabel), &ports)
-			if err != nil {
-				return nil, err
-			}
-			nports, err := convertToNatPort(ports)
-			if err != nil {
-				return nil, err
-			}
-			for portLabel, portBindings := range *nports {
-				resPortMap[portLabel] = portBindings
-			}
+		nports, err := convertToNatPort(n.PortMappings)
+		if err != nil {
+			return nil, err
+		}
+		for portLabel, portBindings := range *nports {
+			resPortMap[portLabel] = portBindings
 		}
 
 		if x.Index == n.PrimaryInterface {
@@ -993,79 +1009,4 @@ func ParseMountProperties(option []string) (rw bool, propagation string) {
 		}
 	}
 	return
-}
-
-func getDefaultLinuxBlkioSettings() LinuxBlkioSettings {
-	return LinuxBlkioSettings{
-		BlkioWeight:          0,
-		BlkioWeightDevice:    make([]*specs.LinuxWeightDevice, 0),
-		BlkioDeviceReadBps:   make([]*specs.LinuxThrottleDevice, 0),
-		BlkioDeviceWriteBps:  make([]*specs.LinuxThrottleDevice, 0),
-		BlkioDeviceReadIOps:  make([]*specs.LinuxThrottleDevice, 0),
-		BlkioDeviceWriteIOps: make([]*specs.LinuxThrottleDevice, 0),
-	}
-}
-
-func getBlkioSettingsFromSpec(spec *specs.Spec, hostConfig *HostConfig) error {
-	if spec == nil {
-		return fmt.Errorf("spec cannot be nil")
-	}
-	if hostConfig == nil {
-		return fmt.Errorf("hostConfig cannot be nil")
-	}
-
-	// Initialize empty arrays by default
-	hostConfig.LinuxBlkioSettings = getDefaultLinuxBlkioSettings()
-
-	if spec.Linux == nil || spec.Linux.Resources == nil || spec.Linux.Resources.BlockIO == nil {
-		return nil
-	}
-
-	blockIO := spec.Linux.Resources.BlockIO
-
-	// Set block IO weight
-	if blockIO.Weight != nil {
-		hostConfig.BlkioWeight = *blockIO.Weight
-	}
-
-	// Set weight devices
-	if len(blockIO.WeightDevice) > 0 {
-		hostConfig.BlkioWeightDevice = make([]*specs.LinuxWeightDevice, len(blockIO.WeightDevice))
-		for i, dev := range blockIO.WeightDevice {
-			hostConfig.BlkioWeightDevice[i] = &dev
-		}
-	}
-
-	// Set throttle devices for read BPS
-	if len(blockIO.ThrottleReadBpsDevice) > 0 {
-		hostConfig.BlkioDeviceReadBps = make([]*specs.LinuxThrottleDevice, len(blockIO.ThrottleReadBpsDevice))
-		for i, dev := range blockIO.ThrottleReadBpsDevice {
-			hostConfig.BlkioDeviceReadBps[i] = &dev
-		}
-	}
-
-	// Set throttle devices for write BPS
-	if len(blockIO.ThrottleWriteBpsDevice) > 0 {
-		hostConfig.BlkioDeviceWriteBps = make([]*specs.LinuxThrottleDevice, len(blockIO.ThrottleWriteBpsDevice))
-		for i, dev := range blockIO.ThrottleWriteBpsDevice {
-			hostConfig.BlkioDeviceWriteBps[i] = &dev
-		}
-	}
-
-	// Set throttle devices for read IOPs
-	if len(blockIO.ThrottleReadIOPSDevice) > 0 {
-		hostConfig.BlkioDeviceReadIOps = make([]*specs.LinuxThrottleDevice, len(blockIO.ThrottleReadIOPSDevice))
-		for i, dev := range blockIO.ThrottleReadIOPSDevice {
-			hostConfig.BlkioDeviceReadIOps[i] = &dev
-		}
-	}
-
-	// Set throttle devices for write IOPs
-	if len(blockIO.ThrottleWriteIOPSDevice) > 0 {
-		hostConfig.BlkioDeviceWriteIOps = make([]*specs.LinuxThrottleDevice, len(blockIO.ThrottleWriteIOPSDevice))
-		for i, dev := range blockIO.ThrottleWriteIOPSDevice {
-			hostConfig.BlkioDeviceWriteIOps[i] = &dev
-		}
-	}
-	return nil
 }
