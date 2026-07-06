@@ -16,3 +16,5 @@ export GOARCH=arm64
 make binaries
 mkdir -p _output/linux/$GOARCH
 mv _output/nerdctl _output/linux/$GOARCH/nerdctl
+
+git apply -R .beagle/v2.0.5-images-prune.patch
