@@ -13,6 +13,7 @@ git -C ansible-docker-nerdctl merge v2.1.6
 ## git
 
 ```bash
+# ./.github/workflows/build-2.1.yml
 git -C ansible-docker-nerdctl checkout release-v2.1 && \
 git -C ansible-docker-nerdctl merge main && \
 git -C ansible-docker-nerdctl push origin release-v2.1 && \
